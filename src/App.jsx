@@ -537,6 +537,11 @@ export default function VocabTracker() {
                     {[["★","new","#3b82f6"],["?","learning","#f59e0b"],["✓","known","#22c55e"]].map(([label, s, color]) => (
                       <button key={s} onClick={e => { e.stopPropagation(); updateStatus(w.id, s); }} style={{ background: w.status === s ? color : "transparent", border: "1px solid " + (w.status === s ? color : "rgba(255,255,255,0.2)"), color: w.status === s ? "#fff" : "rgba(255,255,255,0.25)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}>{label}</button>
                     ))}
+                    <button
+                      onClick={e => { e.stopPropagation(); if (window.confirm(`Obrisati "${w.word}"?`)) deleteWord(w.id); }}
+                      style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.35)", color: "rgba(239,68,68,0.45)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }}
+                      onMouseEnter={e => { e.currentTarget.style.background = "#ef4444"; e.currentTarget.style.color = "#fff"; e.currentTarget.style.borderColor = "#ef4444"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(239,68,68,0.45)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)"; }}>✕</button>
                   </div>
                 </div>
               ))}
