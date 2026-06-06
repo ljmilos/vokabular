@@ -1,8 +1,63 @@
 import { useState, useEffect, useRef } from "react";
 
-// ── TEST VERZIJA — lokalni state, bez baze ──
+const SUPABASE_URL = "https://evajlksybjhnqvrykimf.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2YWpsa3N5YmpobnF2cnlraW1mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2NzY4NjgsImV4cCI6MjA5NjI1Mjg2OH0.WAdG0kvqXNPtgivfZwPxFDOUnmnEk95rYokK0gSRXa4";
 
-// normalize not needed in test version
+const db = {
+  async getAll() {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?order=added_at.desc`, {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+    });
+    return res.json();
+  },
+  async insert(w) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", "Prefer": "return=representation" },
+      body: JSON.stringify({ word: w.word, word_sr: w.wordSr, translation: w.translation, ipa: w.ipa, part_of_speech: w.partOfSpeech, synonyms: w.synonyms, sentences: w.sentences, notes: w.notes, status: "new", review_count: 0, image_url: w.imageUrl || null })
+    });
+    const data = await res.json();
+    return data[0];
+  },
+  async updateStatus(id, status, reviewCount, learnedAt) {
+    await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ status, review_count: reviewCount + 1, learned_at: learnedAt || null })
+    });
+  },
+  async updateSentences(id, sentences) {
+    await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ sentences })
+    });
+  },
+  async updateTranslation(id, wordSr) {
+    await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ word_sr: wordSr, translation: wordSr })
+    });
+  },
+  async updateImageUrl(id, imageUrl) {
+    await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ image_url: imageUrl })
+    });
+  },
+  async delete(id) {
+    await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
+      method: "DELETE",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+    });
+  }
+};
+
+function normalize(r) {
+  return { id: r.id, word: r.word, wordSr: r.word_sr, translation: r.word_sr || r.translation, ipa: r.ipa || "", partOfSpeech: r.part_of_speech, synonyms: r.synonyms || [], sentences: r.sentences || [], notes: r.notes || "", status: r.status || "new", addedAt: r.added_at, reviewCount: r.review_count || 0, learnedAt: r.learned_at, imageUrl: r.image_url || null };
+}
 
 
 
@@ -44,7 +99,11 @@ export default function VocabTracker() {
   const debounceRef = useRef(null);
 
   useEffect(() => {
-    setLoading(false); // test mode — no DB
+    db.getAll().then(rows => {
+      if (Array.isArray(rows)) setWords(rows.map(normalize));
+      else setDbError("Greška pri učitavanju. Provjeri Supabase RLS podešavanja.");
+      setLoading(false);
+    }).catch(() => { setDbError("Ne mogu se spojiti na bazu."); setLoading(false); });
   }, []);
 
   const showToast = (msg, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 2500); };
@@ -58,7 +117,7 @@ export default function VocabTracker() {
     if (cached) { setAiData({ wordEn: cached.word, wordSr: cached.wordSr, translation: cached.translation, partOfSpeech: cached.partOfSpeech, sentences: cached.sentences }); return; }
     setAiLoading(true); setAiError(null); setAiData(null);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/claude", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 500, messages: [{ role: "user", content: `You are a dictionary for a Serbian B1 English learner. User typed: "${word.trim()}". Detect if English or Serbian. RULE: wordEn MUST always be the English word/phrase, wordSr MUST always be the Serbian word/phrase. If user typed Serbian, translate to English for wordEn. If user typed English, translate to Serbian for wordSr. Include 3-10 English synonyms (only real synonyms, as many as truly exist). 3 natural example sentences in English with Serbian translations, varied contexts. Reply ONLY valid JSON, no markdown:\n{"wordEn":"ENGLISH word","wordSr":"SRPSKA rec","partOfSpeech":"type","ipa":"/IPA pronunciation/","synonyms":["syn1","syn2","syn3"],"sentences":[{"en":"s1","sr":"p1"},{"en":"s2","sr":"p2"},{"en":"s3","sr":"p3"},]}` }] })
       });
@@ -73,7 +132,7 @@ export default function VocabTracker() {
     if ((currentSentences?.length || 0) >= 10) { showToast("Maksimum 10 primera!", "#f59e0b"); return; }
     setRegenLoading(true);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/claude", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 200, messages: [{ role: "user", content: `Give me 1 NEW example sentence for "${word}", NOT these:\n${currentSentences?.map(s => "- " + (s.en || s)).join("\n")}\nReply ONLY JSON object:\n{"en":"new sentence","sr":"prevod na srpski"}` }] })
       });
@@ -90,22 +149,29 @@ export default function VocabTracker() {
     setWordInput(val); setAiData(null); setAiError(null);
   };
 
-  const addWord = () => {
+  const addWord = async () => {
     if (!wordInput.trim() || !aiData) return;
     const duplicate = words.find(w => w.word.toLowerCase() === (aiData.wordEn || wordInput.trim()).toLowerCase());
     if (duplicate) { showToast("Reč već postoji!", "#f59e0b"); return; }
-    const newWord = { id: Date.now(), word: aiData.wordEn || wordInput.trim(), wordSr: aiData.wordSr, translation: aiData.wordSr || aiData.translation, ipa: aiData.ipa || "", partOfSpeech: aiData.partOfSpeech, synonyms: aiData.synonyms || [], sentences: aiData.sentences, notes: notes.trim(), status: "new", addedAt: new Date().toISOString(), reviewCount: 0, imageUrl: null };
-    setWords(prev => [newWord, ...prev]);
-    setWordInput(""); setAiData(null); setNotes(""); setView("list");
-    showToast("Reč dodana ✓");
+    setSaving(true);
+    try {
+      const row = await db.insert({ word: aiData.wordEn || wordInput.trim(), wordSr: aiData.wordSr, translation: aiData.wordSr, ipa: aiData.ipa || "", partOfSpeech: aiData.partOfSpeech, synonyms: aiData.synonyms || [], sentences: aiData.sentences, notes: notes.trim(), imageUrl: null });
+      if (row) setWords(prev => [normalize(row), ...prev]);
+      setWordInput(""); setAiData(null); setNotes(""); setView("list");
+      showToast("Reč sačuvana u bazu ✓");
+    } catch (e) { showToast("Greška pri čuvanju", "#ef4444"); }
+    setSaving(false);
   };
 
-  const updateStatus = (id, status) => {
+  const updateStatus = async (id, status) => {
+    const w = words.find(x => x.id === id);
     const learnedAt = status === "known" ? new Date().toISOString() : null;
-    setWords(prev => prev.map(x => x.id === id ? { ...x, status, reviewCount: (x.reviewCount || 0) + 1, learnedAt } : x));
+    await db.updateStatus(id, status, w?.reviewCount || 0, learnedAt);
+    setWords(prev => prev.map(x => x.id === id ? { ...x, status, reviewCount: (x.reviewCount || 0) + 1, learnedAt: learnedAt !== undefined ? learnedAt : x.learnedAt } : x));
   };
 
-  const deleteWord = (id) => {
+  const deleteWord = async (id) => {
+    await db.delete(id);
     setWords(prev => prev.filter(x => x.id !== id)); setView("list");
     showToast("Obrisano", "#ef4444");
   };
@@ -142,15 +208,15 @@ export default function VocabTracker() {
     setQuickAdding(true);
     setPopup(null);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/claude", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 500, messages: [{ role: "user", content: `You are a dictionary for a Serbian B1 English learner. User typed: "${word.trim()}". Detect if English or Serbian. RULE: wordEn MUST always be the English word/phrase, wordSr MUST always be the Serbian word/phrase. If user typed Serbian, translate to English for wordEn. If user typed English, translate to Serbian for wordSr. Include 3-10 English synonyms (only real synonyms, as many as truly exist). 3 natural example sentences in English with Serbian translations, varied contexts. Reply ONLY valid JSON, no markdown:\n{"wordEn":"ENGLISH word","wordSr":"SRPSKA rec","partOfSpeech":"type","ipa":"/IPA pronunciation/","synonyms":["syn1","syn2"],"sentences":[{"en":"s1","sr":"p1"},{"en":"s2","sr":"p2"},{"en":"s3","sr":"p3"},]}` }] })
       });
       const data = await res.json();
       const text = data.content?.find(b => b.type === "text")?.text || "";
       const ai = JSON.parse(text.replace(/```json|```/g, "").trim());
-      const newWord = { id: Date.now(), word: ai.wordEn || word.trim(), wordSr: ai.wordSr, translation: ai.wordSr, ipa: ai.ipa || "", partOfSpeech: ai.partOfSpeech, synonyms: ai.synonyms || [], sentences: ai.sentences, notes: "", status: "new", addedAt: new Date().toISOString(), reviewCount: 0, imageUrl: null };
-      setWords(prev => [newWord, ...prev]);
+      const row = await db.insert({ word: ai.wordEn || word.trim(), wordSr: ai.wordSr, translation: ai.wordSr, ipa: ai.ipa || "", partOfSpeech: ai.partOfSpeech, synonyms: ai.synonyms || [], sentences: ai.sentences, notes: "" });
+      if (row) setWords(prev => [normalize(row), ...prev]);
       showToast(`"${ai.wordEn}" dodato u rečnik ✓`);
     } catch (e) { showToast("Greška, pokušaj ponovo", "#ef4444"); }
     setQuickAdding(false);
@@ -265,12 +331,27 @@ export default function VocabTracker() {
   };
 
   const fetchImage = async (word, cachedUrl = null, wordId = null) => {
+    // Use cached URL — zero API calls
     if (cachedUrl) {
       setWordImage({ url: cachedUrl, cached: true });
       return;
     }
-    // Test mode — slike ne rade u sandboxu, preskačemo
-    setWordImage(null);
+    setWordImage(null); setImageLoading(true);
+    try {
+      const res = await fetch(`/api/unsplash?query=${encodeURIComponent(word)}`);
+      const data = await res.json();
+      const photo = data.results?.[0];
+      if (photo) {
+        const imgUrl = photo.urls.small;
+        setWordImage({ url: imgUrl, author: photo.user.name, authorUrl: photo.user.links.html });
+        // Save URL to DB so next time no API call needed
+        if (wordId) {
+          await db.updateImageUrl(wordId, imgUrl);
+          setWords(prev => prev.map(w => w.id === wordId ? { ...w, imageUrl: imgUrl } : w));
+        }
+      }
+    } catch (e) { setWordImage(null); }
+    setImageLoading(false);
   };
 
   const speak = (text) => {
@@ -292,7 +373,7 @@ export default function VocabTracker() {
     setCombineLoading(true); setCombineResult(null);
     try {
       const wordList = selected.map(w => w.word).join(", ");
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/claude", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 400, messages: [{ role: "user", content: `Write 3 natural English sentences that ALL use these words together: ${wordList}\nEach sentence must contain ALL the listed words. B1-B2 level.\nReply ONLY JSON array:\n[{"en":"sentence 1","sr":"srpski prevod"},{"en":"sentence 2","sr":"srpski prevod"},{"en":"sentence 3","sr":"srpski prevod"}]` }] })
       });
@@ -381,7 +462,7 @@ export default function VocabTracker() {
           <div>
             <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Vokabular Tracker</div>
             <h1 style={{ margin: 0, fontSize: 26, fontWeight: "normal", letterSpacing: -0.5 }}>Moje Engleske Reči</h1>
-            <div style={{ fontSize: 10, color: "#f59e0b", fontFamily: "monospace", marginTop: 4 }}>● TEST VERZIJA — reči se ne čuvaju</div>
+            <div style={{ fontSize: 10, color: "#3a3a5e", fontFamily: "monospace", marginTop: 4 }}>● Supabase Cloud</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -470,7 +551,7 @@ export default function VocabTracker() {
       {/* Fixed save button — only in add view when AI data is ready */}
       {view === "add" && aiData && !aiLoading && (
         <button onClick={addWord} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#d97706", border: "none", color: "#fff", padding: "14px 36px", borderRadius: 50, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 2, boxShadow: "0 4px 24px rgba(217,119,6,0.5)", zIndex: 100, whiteSpace: "nowrap" }}>
-          DODAJ U LISTU →
+          {saving ? "ČUVAM..." : "SAČUVAJ U BAZU →"}
         </button>
       )}
 
