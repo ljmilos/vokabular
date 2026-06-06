@@ -101,6 +101,14 @@ export default function VocabTracker() {
   const [saving, setSaving] = useState(false);
   const debounceRef = useRef(null);
 
+  useEffect(() => {
+    db.getAll().then(rows => {
+      if (Array.isArray(rows)) setWords(rows.map(normalize));
+      else setDbError("Greška pri učitavanju. Provjeri Supabase RLS podešavanja.");
+      setLoading(false);
+    }).catch(() => { setDbError("Ne mogu se spojiti na bazu."); setLoading(false); });
+  }, []);
+
 
 
   const showToast = (msg, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 2500); };
