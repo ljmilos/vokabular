@@ -10,7 +10,6 @@ import { useState, useEffect, useRef } from "react";
 const SUPABASE_URL = "https://evajlksybjhnqvrykimf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2YWpsa3N5YmpobnF2cnlraW1mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2NzY4NjgsImV4cCI6MjA5NjI1Mjg2OH0.WAdG0kvqXNPtgivfZwPxFDOUnmnEk95rYokK0gSRXa4";
 
-// ── AUTH ──
 const supabaseAuth = {
   async signUp(email, password) {
     const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
@@ -42,7 +41,6 @@ const supabaseAuth = {
   }
 };
 
-// ── DB ──
 const db = {
   async getAll(token) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?order=added_at.desc`, {
@@ -115,10 +113,8 @@ function highlightWord(sentence, word) {
 }
 
 export default function VocabTracker() {
-  const [emailConfirmed, setEmailConfirmed] = useState(false);
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(() => { try { return localStorage.getItem("sb_token") || null; } catch(e) { return null; } });
-  const [authView, setAuthView] = useState("login");
+  const [authView, setAuthView] = useState("login"); // login | register
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
@@ -144,20 +140,17 @@ export default function VocabTracker() {
   const debounceRef = useRef(null);
 
   useEffect(() => {
-    // Handle email confirmation redirect — token in URL hash
     const hash = window.location.hash;
     if (hash.includes("access_token=")) {
       const params = new URLSearchParams(hash.replace("#", ""));
       const accessToken = params.get("access_token");
       if (accessToken) {
         window.history.replaceState(null, "", window.location.pathname);
-        // Show confirmation screen, don't auto-login
         setEmailConfirmed(true);
         setLoading(false);
         return;
       }
     }
-
     const savedToken = localStorage.getItem("sb_token");
     if (savedToken) {
       supabaseAuth.getUser(savedToken).then(async u => {
@@ -308,12 +301,11 @@ export default function VocabTracker() {
   const handleWordClick = (e, word) => {
     e.stopPropagation();
     const sel = window.getSelection();
-    // If user selected text, let handleTextSelection handle it
     if (sel && sel.toString().trim().length > 0) return;
     const clean = word.replace(/[^a-zA-ZčćžšđČĆŽŠĐ\s'-]/g, "").trim();
     if (!clean || clean.length < 2) return;
     const rect = e.target.getBoundingClientRect();
-    setPopup({ word: clean, x: rect.left + rect.width / 2, y: rect.top - 10 });
+    setPopup({ word: clean, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
   };
 
   const ClickableSentence = ({ text, highlightTarget }) => {
@@ -323,7 +315,7 @@ export default function VocabTracker() {
       if (selected && selected.length >= 2 && selected.length <= 60) {
         const range = sel.getRangeAt(0);
         const rect = range.getBoundingClientRect();
-        setPopup({ word: selected, x: rect.left + rect.width / 2, y: rect.top - 10 });
+        setPopup({ word: selected, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
       }
     };
 
@@ -402,19 +394,12 @@ export default function VocabTracker() {
   };
 
   const fetchImage = async (word, cachedUrl = null, wordId = null) => {
-    if (cachedUrl) { setWordImage({ url: cachedUrl, cached: true }); return; }
-    setWordImage(null); setImageLoading(true);
-    try {
-      const res = await fetch(`/api/unsplash?query=${encodeURIComponent(word)}`);
-      const data = await res.json();
-      const photo = data.results?.[0];
-      if (photo) {
-        const imgUrl = photo.urls.small;
-        setWordImage({ url: imgUrl, author: photo.user.name, authorUrl: photo.user.links.html });
-        if (wordId) { await db.updateImageUrl(wordId, imgUrl, token); setWords(prev => prev.map(w => w.id === wordId ? { ...w, imageUrl: imgUrl } : w)); }
-      }
-    } catch (e) { setWordImage(null); }
-    setImageLoading(false);
+    if (cachedUrl) {
+      setWordImage({ url: cachedUrl, cached: true });
+      return;
+    }
+    // Test mode — slike ne rade u sandboxu, preskačemo
+    setWordImage(null);
   };
 
   const speak = (text) => {
@@ -533,14 +518,8 @@ export default function VocabTracker() {
         <div style={{ fontSize: 64, marginBottom: 20 }}>✅</div>
         <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 12, textTransform: "uppercase" }}>Vokabular Tracker</div>
         <h2 style={{ margin: "0 0 12px", fontSize: 22, fontWeight: "normal", color: "#f0ebe3" }}>Email uspešno potvrđen!</h2>
-        <p style={{ color: "#888", fontSize: 14, lineHeight: 1.6, marginBottom: 32 }}>
-          Tvoj nalog je aktiviran i spreman za korišćenje.<br />
-          Možeš se sada prijaviti u sistem.
-        </p>
-        <button onClick={() => setEmailConfirmed(false)}
-          style={{ background: "#6366f1", border: "none", color: "#fff", padding: "14px 40px", borderRadius: 10, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1 }}>
-          PRIJAVI SE →
-        </button>
+        <p style={{ color: "#888", fontSize: 14, lineHeight: 1.6, marginBottom: 32 }}>Tvoj nalog je aktiviran i spreman za korišćenje.<br />Možeš se sada prijaviti u sistem.</p>
+        <button onClick={() => setEmailConfirmed(false)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "14px 40px", borderRadius: 10, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1 }}>PRIJAVI SE →</button>
       </div>
     </div>
   );
@@ -580,10 +559,10 @@ export default function VocabTracker() {
     <div style={{ minHeight: "100vh", background: "#0f0f13", fontFamily: "Georgia, serif", color: "#f0ebe3" }} onClick={() => setPopup(null)}>
       {/* Quick add popup */}
       {popup && (
-        <div style={{ position: "fixed", left: Math.min(popup.x - 80, window.innerWidth - 180), top: popup.y - 52, zIndex: 9999, background: "#1a1a2e", border: "1px solid #6366f1", borderRadius: 10, padding: "8px 12px", boxShadow: "0 8px 24px rgba(0,0,0,0.6)", display: "flex", alignItems: "center", gap: 10, whiteSpace: "nowrap" }}>
-          <span style={{ fontSize: 13, color: "#a5b4fc", fontStyle: "italic", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>"{popup.word}"</span>
-          <button onClick={() => handleQuickAdd(popup.word)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "4px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>+ Dodaj</button>
-          <button onClick={() => setPopup(null)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14, padding: "0 2px" }}>✕</button>
+        <div style={{ position: "fixed", left: Math.min(Math.max(popup.x - 80, 8), window.innerWidth - 200), top: Math.min(popup.y + 8, window.innerHeight - 80), zIndex: 9999, background: "#1a1a2e", border: "1px solid #6366f1", borderRadius: 12, padding: "10px 16px", boxShadow: "0 8px 32px rgba(0,0,0,0.7)", display: "flex", alignItems: "center", gap: 12, whiteSpace: "nowrap", maxWidth: "90vw" }}>
+          <span style={{ fontSize: 13, color: "#a5b4fc", fontStyle: "italic", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>"{popup.word}"</span>
+          <button onClick={() => handleQuickAdd(popup.word)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "monospace" }}>+ Dodaj</button>
+          <button onClick={() => setPopup(null)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 18, padding: "0 4px" }}>✕</button>
         </div>
       )}
 
