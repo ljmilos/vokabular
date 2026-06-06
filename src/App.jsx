@@ -10,37 +10,39 @@ import { useState, useEffect, useRef } from "react";
 const SUPABASE_URL = "https://evajlksybjhnqvrykimf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2YWpsa3N5YmpobnF2cnlraW1mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2NzY4NjgsImV4cCI6MjA5NjI1Mjg2OH0.WAdG0kvqXNPtgivfZwPxFDOUnmnEk95rYokK0gSRXa4";
 
+// ── AUTH ──
 const supabaseAuth = {
   async signUp(email, password) {
-    const res = await fetch(`/api/auth?path=signup`, {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
       body: JSON.stringify({ email, password })
     });
     return res.json();
   },
   async signIn(email, password) {
-    const res = await fetch(`/api/auth?path=token%3Fgrant_type%3Dpassword`, {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
       body: JSON.stringify({ email, password })
     });
     return res.json();
   },
   async signOut(token) {
-    await fetch(`/api/auth?path=logout`, {
+    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
       method: "POST",
-      headers: { "Authorization": `Bearer ${token}` }
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
     });
   },
   async getUser(token) {
-    const res = await fetch(`/api/auth?path=user`, {
-      headers: { "Authorization": `Bearer ${token}` }
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
     });
     return res.json();
   }
 };
 
+// ── DB ──
 const db = {
   async getAll(token) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?order=added_at.desc`, {
@@ -113,8 +115,8 @@ function highlightWord(sentence, word) {
 }
 
 export default function VocabTracker() {
-  const [emailConfirmed, setEmailConfirmed] = useState(false);
   const [user, setUser] = useState(null);
+  const [token, setToken] = useState(() => localStorage.getItem("sb_token") || null);
   const [authView, setAuthView] = useState("login"); // login | register
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -141,17 +143,28 @@ export default function VocabTracker() {
   const debounceRef = useRef(null);
 
   useEffect(() => {
+    // Handle email confirmation redirect — token in URL hash
     const hash = window.location.hash;
     if (hash.includes("access_token=")) {
       const params = new URLSearchParams(hash.replace("#", ""));
       const accessToken = params.get("access_token");
       if (accessToken) {
-        window.history.replaceState(null, "", window.location.pathname);
-        setEmailConfirmed(true);
-        setLoading(false);
+        localStorage.setItem("sb_token", accessToken);
+        window.history.replaceState(null, "", window.location.pathname); // clean URL
+        supabaseAuth.getUser(accessToken).then(async u => {
+          if (u?.id) {
+            setUser(u);
+            setToken(accessToken);
+            showToast("Email potvrđen! Dobrodošao! 🎉", "#22c55e");
+            const rows = await db.getAll(accessToken);
+            if (Array.isArray(rows)) setWords(rows.map(normalize));
+          }
+          setLoading(false);
+        });
         return;
       }
     }
+
     const savedToken = localStorage.getItem("sb_token");
     if (savedToken) {
       supabaseAuth.getUser(savedToken).then(async u => {
@@ -302,11 +315,12 @@ export default function VocabTracker() {
   const handleWordClick = (e, word) => {
     e.stopPropagation();
     const sel = window.getSelection();
+    // If user selected text, let handleTextSelection handle it
     if (sel && sel.toString().trim().length > 0) return;
     const clean = word.replace(/[^a-zA-ZčćžšđČĆŽŠĐ\s'-]/g, "").trim();
     if (!clean || clean.length < 2) return;
     const rect = e.target.getBoundingClientRect();
-    setPopup({ word: clean, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
+    setPopup({ word: clean, x: rect.left + rect.width / 2, y: rect.top - 10 });
   };
 
   const ClickableSentence = ({ text, highlightTarget }) => {
@@ -316,7 +330,7 @@ export default function VocabTracker() {
       if (selected && selected.length >= 2 && selected.length <= 60) {
         const range = sel.getRangeAt(0);
         const rect = range.getBoundingClientRect();
-        setPopup({ word: selected, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
+        setPopup({ word: selected, x: rect.left + rect.width / 2, y: rect.top - 10 });
       }
     };
 
@@ -395,12 +409,19 @@ export default function VocabTracker() {
   };
 
   const fetchImage = async (word, cachedUrl = null, wordId = null) => {
-    if (cachedUrl) {
-      setWordImage({ url: cachedUrl, cached: true });
-      return;
-    }
-    // Test mode — slike ne rade u sandboxu, preskačemo
-    setWordImage(null);
+    if (cachedUrl) { setWordImage({ url: cachedUrl, cached: true }); return; }
+    setWordImage(null); setImageLoading(true);
+    try {
+      const res = await fetch(`/api/unsplash?query=${encodeURIComponent(word)}`);
+      const data = await res.json();
+      const photo = data.results?.[0];
+      if (photo) {
+        const imgUrl = photo.urls.small;
+        setWordImage({ url: imgUrl, author: photo.user.name, authorUrl: photo.user.links.html });
+        if (wordId) { await db.updateImageUrl(wordId, imgUrl, token); setWords(prev => prev.map(w => w.id === wordId ? { ...w, imageUrl: imgUrl } : w)); }
+      }
+    } catch (e) { setWordImage(null); }
+    setImageLoading(false);
   };
 
   const speak = (text) => {
@@ -500,36 +521,18 @@ export default function VocabTracker() {
       } else if (authView === "register" && !data.access_token) {
         setAuthError("Registracija uspješna! Provjeri email i potvrdi nalog, zatim se prijavi.");
       } else if (data.access_token) {
-        const t = data.access_token;
-        localStorage.setItem("sb_token", t);
-        setToken(t);
+        localStorage.setItem("sb_token", data.access_token);
+        setToken(data.access_token);
         setUser(data.user);
-        try {
-          const rows = await db.getAll(t);
-          if (Array.isArray(rows)) setWords(rows.map(normalize));
-        } catch (dbErr) { console.error("DB error:", dbErr); }
+        const rows = await db.getAll(data.access_token);
+        if (Array.isArray(rows)) setWords(rows.map(normalize));
       }
-    } catch (e) {
-      console.error("Auth error:", e);
-      setAuthError("Greška pri povezivanju. Pokušaj ponovo.");
-    }
+    } catch (e) { setAuthError("Greška pri povezivanju. Pokušaj ponovo."); }
     setAuthLoading(false);
   };
 
   if (loading) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", color: "#6366f1", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
   if (dbError) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
-
-  if (emailConfirmed) return (
-    <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ background: "#1a1a2e", border: "1px solid #22c55e44", borderRadius: 20, padding: 48, width: "100%", maxWidth: 420, textAlign: "center" }}>
-        <div style={{ fontSize: 64, marginBottom: 20 }}>✅</div>
-        <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 12, textTransform: "uppercase" }}>Vokabular Tracker</div>
-        <h2 style={{ margin: "0 0 12px", fontSize: 22, fontWeight: "normal", color: "#f0ebe3" }}>Email uspešno potvrđen!</h2>
-        <p style={{ color: "#888", fontSize: 14, lineHeight: 1.6, marginBottom: 32 }}>Tvoj nalog je aktiviran i spreman za korišćenje.<br />Možeš se sada prijaviti u sistem.</p>
-        <button onClick={() => setEmailConfirmed(false)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "14px 40px", borderRadius: 10, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1 }}>PRIJAVI SE →</button>
-      </div>
-    </div>
-  );
 
   if (!user) return (
     <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
@@ -566,10 +569,10 @@ export default function VocabTracker() {
     <div style={{ minHeight: "100vh", background: "#0f0f13", fontFamily: "Georgia, serif", color: "#f0ebe3" }} onClick={() => setPopup(null)}>
       {/* Quick add popup */}
       {popup && (
-        <div style={{ position: "fixed", left: Math.min(Math.max(popup.x - 80, 8), window.innerWidth - 200), top: Math.min(popup.y + 8, window.innerHeight - 80), zIndex: 9999, background: "#1a1a2e", border: "1px solid #6366f1", borderRadius: 12, padding: "10px 16px", boxShadow: "0 8px 32px rgba(0,0,0,0.7)", display: "flex", alignItems: "center", gap: 12, whiteSpace: "nowrap", maxWidth: "90vw" }}>
-          <span style={{ fontSize: 13, color: "#a5b4fc", fontStyle: "italic", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>"{popup.word}"</span>
-          <button onClick={() => handleQuickAdd(popup.word)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "monospace" }}>+ Dodaj</button>
-          <button onClick={() => setPopup(null)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 18, padding: "0 4px" }}>✕</button>
+        <div style={{ position: "fixed", left: Math.min(popup.x - 80, window.innerWidth - 180), top: popup.y - 52, zIndex: 9999, background: "#1a1a2e", border: "1px solid #6366f1", borderRadius: 10, padding: "8px 12px", boxShadow: "0 8px 24px rgba(0,0,0,0.6)", display: "flex", alignItems: "center", gap: 10, whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 13, color: "#a5b4fc", fontStyle: "italic", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>"{popup.word}"</span>
+          <button onClick={() => handleQuickAdd(popup.word)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "4px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>+ Dodaj</button>
+          <button onClick={() => setPopup(null)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14, padding: "0 2px" }}>✕</button>
         </div>
       )}
 
