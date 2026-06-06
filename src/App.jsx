@@ -115,8 +115,7 @@ function highlightWord(sentence, word) {
 }
 
 export default function VocabTracker() {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(() => localStorage.getItem("sb_token") || null);
+  const [emailConfirmed, setEmailConfirmed] = useState(false);
   const [authView, setAuthView] = useState("login"); // login | register
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -149,18 +148,10 @@ export default function VocabTracker() {
       const params = new URLSearchParams(hash.replace("#", ""));
       const accessToken = params.get("access_token");
       if (accessToken) {
-        localStorage.setItem("sb_token", accessToken);
-        window.history.replaceState(null, "", window.location.pathname); // clean URL
-        supabaseAuth.getUser(accessToken).then(async u => {
-          if (u?.id) {
-            setUser(u);
-            setToken(accessToken);
-            showToast("Email potvrđen! Dobrodošao! 🎉", "#22c55e");
-            const rows = await db.getAll(accessToken);
-            if (Array.isArray(rows)) setWords(rows.map(normalize));
-          }
-          setLoading(false);
-        });
+        window.history.replaceState(null, "", window.location.pathname);
+        // Show confirmation screen, don't auto-login
+        setEmailConfirmed(true);
+        setLoading(false);
         return;
       }
     }
@@ -533,6 +524,24 @@ export default function VocabTracker() {
 
   if (loading) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", color: "#6366f1", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
   if (dbError) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
+
+  if (emailConfirmed) return (
+    <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ background: "#1a1a2e", border: "1px solid #22c55e44", borderRadius: 20, padding: 48, width: "100%", maxWidth: 420, textAlign: "center" }}>
+        <div style={{ fontSize: 64, marginBottom: 20 }}>✅</div>
+        <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 12, textTransform: "uppercase" }}>Vokabular Tracker</div>
+        <h2 style={{ margin: "0 0 12px", fontSize: 22, fontWeight: "normal", color: "#f0ebe3" }}>Email uspešno potvrđen!</h2>
+        <p style={{ color: "#888", fontSize: 14, lineHeight: 1.6, marginBottom: 32 }}>
+          Tvoj nalog je aktiviran i spreman za korišćenje.<br />
+          Možeš se sada prijaviti u sistem.
+        </p>
+        <button onClick={() => setEmailConfirmed(false)}
+          style={{ background: "#6366f1", border: "none", color: "#fff", padding: "14px 40px", borderRadius: 10, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1 }}>
+          PRIJAVI SE →
+        </button>
+      </div>
+    </div>
+  );
 
   if (!user) return (
     <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
