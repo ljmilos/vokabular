@@ -116,7 +116,9 @@ function highlightWord(sentence, word) {
 
 export default function VocabTracker() {
   const [emailConfirmed, setEmailConfirmed] = useState(false);
-  const [authView, setAuthView] = useState("login"); // login | register
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(() => { try { return localStorage.getItem("sb_token") || null; } catch(e) { return null; } });
+  const [authView, setAuthView] = useState("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
