@@ -10,54 +10,87 @@ import { useState, useEffect, useRef } from "react";
 const SUPABASE_URL = "https://evajlksybjhnqvrykimf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2YWpsa3N5YmpobnF2cnlraW1mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2NzY4NjgsImV4cCI6MjA5NjI1Mjg2OH0.WAdG0kvqXNPtgivfZwPxFDOUnmnEk95rYokK0gSRXa4";
 
-const db = {
-  async getAll() {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?order=added_at.desc`, {
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+// ── AUTH ──
+const supabaseAuth = {
+  async signUp(email, password) {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
     });
     return res.json();
   },
-  async insert(w) {
+  async signIn(email, password) {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
+    });
+    return res.json();
+  },
+  async signOut(token) {
+    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+    });
+  },
+  async getUser(token) {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+    });
+    return res.json();
+  }
+};
+
+// ── DB ──
+const db = {
+  async getAll(token) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?order=added_at.desc`, {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+    });
+    return res.json();
+  },
+  async insert(w, token) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", "Prefer": "return=representation" },
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json", "Prefer": "return=representation" },
       body: JSON.stringify({ word: w.word, word_sr: w.wordSr, translation: w.translation, ipa: w.ipa, part_of_speech: w.partOfSpeech, synonyms: w.synonyms, sentences: w.sentences, notes: w.notes, status: "new", review_count: 0, image_url: w.imageUrl || null })
     });
     const data = await res.json();
     return data[0];
   },
-  async updateStatus(id, status, reviewCount, learnedAt) {
+  async updateStatus(id, status, reviewCount, learnedAt, token) {
     await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
       method: "PATCH",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ status, review_count: reviewCount + 1, learned_at: learnedAt || null })
     });
   },
-  async updateSentences(id, sentences) {
+  async updateSentences(id, sentences, token) {
     await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
       method: "PATCH",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ sentences })
     });
   },
-  async updateTranslation(id, wordSr) {
+  async updateTranslation(id, wordSr, token) {
     await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
       method: "PATCH",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ word_sr: wordSr, translation: wordSr })
     });
   },
-  async updateImageUrl(id, imageUrl) {
+  async updateImageUrl(id, imageUrl, token) {
     await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
       method: "PATCH",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ image_url: imageUrl })
     });
   },
-  async delete(id) {
+  async delete(id, token) {
     await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
       method: "DELETE",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
     });
   }
 };
@@ -82,6 +115,14 @@ function highlightWord(sentence, word) {
 }
 
 export default function VocabTracker() {
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(() => localStorage.getItem("sb_token") || null);
+  const [authView, setAuthView] = useState("login"); // login | register
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState(null);
+
   const [words, setWords] = useState([]);
   const [view, setView] = useState("list");
   const [wordInput, setWordInput] = useState("");
@@ -102,14 +143,25 @@ export default function VocabTracker() {
   const debounceRef = useRef(null);
 
   useEffect(() => {
-    db.getAll().then(rows => {
-      if (Array.isArray(rows)) setWords(rows.map(normalize));
-      else setDbError("Greška pri učitavanju. Provjeri Supabase RLS podešavanja.");
+    const savedToken = localStorage.getItem("sb_token");
+    if (savedToken) {
+      supabaseAuth.getUser(savedToken).then(u => {
+        if (u?.id) {
+          setUser(u);
+          setToken(savedToken);
+          db.getAll(savedToken).then(rows => {
+            if (Array.isArray(rows)) setWords(rows.map(normalize));
+            setLoading(false);
+          });
+        } else {
+          localStorage.removeItem("sb_token");
+          setLoading(false);
+        }
+      }).catch(() => setLoading(false));
+    } else {
       setLoading(false);
-    }).catch(() => { setDbError("Ne mogu se spojiti na bazu."); setLoading(false); });
+    }
   }, []);
-
-
 
   const showToast = (msg, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 2500); };
 
@@ -160,10 +212,10 @@ export default function VocabTracker() {
     if (duplicate) { showToast("Reč već postoji!", "#f59e0b"); return; }
     setSaving(true);
     try {
-      const row = await db.insert({ word: aiData.wordEn || wordInput.trim(), wordSr: aiData.wordSr, translation: aiData.wordSr, ipa: aiData.ipa || "", partOfSpeech: aiData.partOfSpeech, synonyms: aiData.synonyms || [], sentences: aiData.sentences, notes: notes.trim(), imageUrl: null });
+      const row = await db.insert({ word: aiData.wordEn || wordInput.trim(), wordSr: aiData.wordSr, translation: aiData.wordSr, ipa: aiData.ipa || "", partOfSpeech: aiData.partOfSpeech, synonyms: aiData.synonyms || [], sentences: aiData.sentences, notes: notes.trim(), imageUrl: null }, token);
       if (row) setWords(prev => [normalize(row), ...prev]);
       setWordInput(""); setAiData(null); setNotes(""); setView("list");
-      showToast("Reč sačuvana u bazu ✓");
+      showToast("Reč sačuvana ✓");
     } catch (e) { showToast("Greška pri čuvanju", "#ef4444"); }
     setSaving(false);
   };
@@ -171,12 +223,12 @@ export default function VocabTracker() {
   const updateStatus = async (id, status) => {
     const w = words.find(x => x.id === id);
     const learnedAt = status === "known" ? new Date().toISOString() : null;
-    await db.updateStatus(id, status, w?.reviewCount || 0, learnedAt);
+    await db.updateStatus(id, status, w?.reviewCount || 0, learnedAt, token);
     setWords(prev => prev.map(x => x.id === id ? { ...x, status, reviewCount: (x.reviewCount || 0) + 1, learnedAt } : x));
   };
 
   const deleteWord = async (id) => {
-    await db.delete(id);
+    await db.delete(id, token);
     setWords(prev => prev.filter(x => x.id !== id)); setView("list");
     showToast("Obrisano", "#ef4444");
   };
@@ -220,7 +272,7 @@ export default function VocabTracker() {
       const data = await res.json();
       const text = data.content?.find(b => b.type === "text")?.text || "";
       const ai = JSON.parse(text.replace(/```json|```/g, "").trim());
-      const row = await db.insert({ word: ai.wordEn || word.trim(), wordSr: ai.wordSr, translation: ai.wordSr, ipa: ai.ipa || "", partOfSpeech: ai.partOfSpeech, synonyms: ai.synonyms || [], sentences: ai.sentences, notes: "", imageUrl: null });
+      const row = await db.insert({ word: ai.wordEn || word.trim(), wordSr: ai.wordSr, translation: ai.wordSr, ipa: ai.ipa || "", partOfSpeech: ai.partOfSpeech, synonyms: ai.synonyms || [], sentences: ai.sentences, notes: "", imageUrl: null }, token);
       if (row) setWords(prev => [normalize(row), ...prev]);
       showToast(`"${ai.wordEn}" dodato u rečnik ✓`);
     } catch (e) { showToast("Greška, pokušaj ponovo", "#ef4444"); }
@@ -336,10 +388,7 @@ export default function VocabTracker() {
   };
 
   const fetchImage = async (word, cachedUrl = null, wordId = null) => {
-    if (cachedUrl) {
-      setWordImage({ url: cachedUrl, cached: true });
-      return;
-    }
+    if (cachedUrl) { setWordImage({ url: cachedUrl, cached: true }); return; }
     setWordImage(null); setImageLoading(true);
     try {
       const res = await fetch(`/api/unsplash?query=${encodeURIComponent(word)}`);
@@ -348,10 +397,7 @@ export default function VocabTracker() {
       if (photo) {
         const imgUrl = photo.urls.small;
         setWordImage({ url: imgUrl, author: photo.user.name, authorUrl: photo.user.links.html });
-        if (wordId) {
-          await db.updateImageUrl(wordId, imgUrl);
-          setWords(prev => prev.map(w => w.id === wordId ? { ...w, imageUrl: imgUrl } : w));
-        }
+        if (wordId) { await db.updateImageUrl(wordId, imgUrl, token); setWords(prev => prev.map(w => w.id === wordId ? { ...w, imageUrl: imgUrl } : w)); }
       }
     } catch (e) { setWordImage(null); }
     setImageLoading(false);
@@ -436,11 +482,67 @@ export default function VocabTracker() {
     }, 600);
   };
 
-  if (loading) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", color: "#6366f1", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
-  if (dbError) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
+  const handleAuth = async () => {
+    if (!authEmail || !authPassword) { setAuthError("Upiši email i lozinku."); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authEmail)) { setAuthError("Upiši ispravnu email adresu."); return; }
+    if (authPassword.length < 6) { setAuthError("Lozinka mora imati najmanje 6 karaktera."); return; }
+    setAuthLoading(true); setAuthError(null);
+    try {
+      const data = authView === "login"
+        ? await supabaseAuth.signIn(authEmail, authPassword)
+        : await supabaseAuth.signUp(authEmail, authPassword);
+      if (data.error || data.error_code) {
+        const msg = data.error_description || data.msg || data.error || "Greška pri prijavi.";
+        if (msg.includes("Invalid login")) setAuthError("Pogrešan email ili lozinka.");
+        else if (msg.includes("already registered")) setAuthError("Email je već registrovan. Prijavi se.");
+        else if (msg.includes("confirm")) setAuthError("Potvrdi email adresu pre prijave.");
+        else setAuthError(msg);
+      } else if (authView === "register" && !data.access_token) {
+        setAuthError("Registracija uspješna! Provjeri email i potvrdi nalog, zatim se prijavi.");
+      } else if (data.access_token) {
+        localStorage.setItem("sb_token", data.access_token);
+        setToken(data.access_token);
+        setUser(data.user);
+        const rows = await db.getAll(data.access_token);
+        if (Array.isArray(rows)) setWords(rows.map(normalize));
+      }
+    } catch (e) { setAuthError("Greška pri povezivanju. Pokušaj ponovo."); }
+    setAuthLoading(false);
+  };
 
   if (loading) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", color: "#6366f1", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
   if (dbError) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
+
+  if (!user) return (
+    <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 20, padding: 40, width: "100%", maxWidth: 400 }}>
+        <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 8, textTransform: "uppercase" }}>Vokabular Tracker</div>
+        <h1 style={{ margin: "0 0 32px", fontSize: 24, fontWeight: "normal" }}>{authView === "login" ? "Prijava" : "Registracija"}</h1>
+        {authError && <div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 8, padding: "10px 14px", color: "#ef4444", fontSize: 13, marginBottom: 16 }}>{authError}</div>}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Email</label>
+          <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAuth()} placeholder="vas@email.com"
+            style={{ width: "100%", background: "#12121a", border: "1px solid #2a2a3e", color: "#f0ebe3", padding: "11px 14px", borderRadius: 8, fontSize: 15, fontFamily: "Georgia, serif", boxSizing: "border-box" }} />
+        </div>
+        <div style={{ marginBottom: 24 }}>
+          <label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Lozinka</label>
+          <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAuth()} placeholder="••••••••"
+            style={{ width: "100%", background: "#12121a", border: "1px solid #2a2a3e", color: "#f0ebe3", padding: "11px 14px", borderRadius: 8, fontSize: 15, fontFamily: "Georgia, serif", boxSizing: "border-box" }} />
+        </div>
+        <button onClick={handleAuth} disabled={authLoading}
+          style={{ width: "100%", background: authLoading ? "#3a3a6e" : "#6366f1", border: "none", color: "#fff", padding: "14px", borderRadius: 10, cursor: authLoading ? "default" : "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1, marginBottom: 16 }}>
+          {authLoading ? "ČEKAJ..." : authView === "login" ? "PRIJAVI SE" : "REGISTRUJ SE"}
+        </button>
+        <div style={{ textAlign: "center", fontSize: 13, color: "#888" }}>
+          {authView === "login" ? "Nemaš nalog?" : "Već imaš nalog?"}
+          <button onClick={() => { setAuthView(authView === "login" ? "register" : "login"); setAuthError(null); }}
+            style={{ background: "none", border: "none", color: "#6366f1", cursor: "pointer", fontSize: 13, marginLeft: 6, textDecoration: "underline" }}>
+            {authView === "login" ? "Registruj se" : "Prijavi se"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ minHeight: "100vh", background: "#0f0f13", fontFamily: "Georgia, serif", color: "#f0ebe3" }} onClick={() => setPopup(null)}>
@@ -469,6 +571,10 @@ export default function VocabTracker() {
             <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Vokabular Tracker</div>
             <h1 style={{ margin: 0, fontSize: 26, fontWeight: "normal", letterSpacing: -0.5 }}>Moje Engleske Reči</h1>
             <div style={{ fontSize: 10, color: "#3a3a5e", fontFamily: "monospace", marginTop: 4 }}>● Supabase Cloud</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+            <div style={{ fontSize: 11, color: "#555", fontFamily: "monospace" }}>{user.email}</div>
+            <button onClick={() => { supabaseAuth.signOut(token); localStorage.removeItem("sb_token"); setUser(null); setToken(null); setWords([]); }} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>odjavi se</button>
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -632,7 +738,7 @@ export default function VocabTracker() {
                       style={{ flex: 1, background: "#12121a", border: "1px solid #6366f1", color: "#f0ebe3", padding: "8px 12px", borderRadius: 8, fontSize: 18, fontFamily: "Georgia, serif" }}
                     />
                     <button onClick={async () => {
-                      await db.updateTranslation(selected.id, editTranslationVal);
+                      await db.updateTranslation(selected.id, editTranslationVal, token);
                       setWords(prev => prev.map(w => w.id === selected.id ? { ...w, wordSr: editTranslationVal, translation: editTranslationVal } : w));
                       setSelected(prev => ({ ...prev, wordSr: editTranslationVal, translation: editTranslationVal }));
                       setEditingTranslation(false);
