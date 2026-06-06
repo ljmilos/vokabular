@@ -113,6 +113,7 @@ function highlightWord(sentence, word) {
 }
 
 export default function VocabTracker() {
+  const [emailConfirmed, setEmailConfirmed] = useState(false);
   const [user, setUser] = useState(null);
   const [authView, setAuthView] = useState("login"); // login | register
   const [authEmail, setAuthEmail] = useState("");
