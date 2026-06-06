@@ -12,30 +12,30 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 const supabaseAuth = {
   async signUp(email, password) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+    const res = await fetch(`/api/auth?path=signup`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password })
     });
     return res.json();
   },
   async signIn(email, password) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    const res = await fetch(`/api/auth?path=token%3Fgrant_type%3Dpassword`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password })
     });
     return res.json();
   },
   async signOut(token) {
-    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+    await fetch(`/api/auth?path=logout`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+      headers: { "Authorization": `Bearer ${token}` }
     });
   },
   async getUser(token) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+    const res = await fetch(`/api/auth?path=user`, {
+      headers: { "Authorization": `Bearer ${token}` }
     });
     return res.json();
   }
