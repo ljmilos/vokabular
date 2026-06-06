@@ -143,16 +143,37 @@ export default function VocabTracker() {
   const debounceRef = useRef(null);
 
   useEffect(() => {
+    // Handle email confirmation redirect — token in URL hash
+    const hash = window.location.hash;
+    if (hash.includes("access_token=")) {
+      const params = new URLSearchParams(hash.replace("#", ""));
+      const accessToken = params.get("access_token");
+      if (accessToken) {
+        localStorage.setItem("sb_token", accessToken);
+        window.history.replaceState(null, "", window.location.pathname); // clean URL
+        supabaseAuth.getUser(accessToken).then(async u => {
+          if (u?.id) {
+            setUser(u);
+            setToken(accessToken);
+            showToast("Email potvrđen! Dobrodošao! 🎉", "#22c55e");
+            const rows = await db.getAll(accessToken);
+            if (Array.isArray(rows)) setWords(rows.map(normalize));
+          }
+          setLoading(false);
+        });
+        return;
+      }
+    }
+
     const savedToken = localStorage.getItem("sb_token");
     if (savedToken) {
-      supabaseAuth.getUser(savedToken).then(u => {
+      supabaseAuth.getUser(savedToken).then(async u => {
         if (u?.id) {
           setUser(u);
           setToken(savedToken);
-          db.getAll(savedToken).then(rows => {
-            if (Array.isArray(rows)) setWords(rows.map(normalize));
-            setLoading(false);
-          });
+          const rows = await db.getAll(savedToken);
+          if (Array.isArray(rows)) setWords(rows.map(normalize));
+          setLoading(false);
         } else {
           localStorage.removeItem("sb_token");
           setLoading(false);
