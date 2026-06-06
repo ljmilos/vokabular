@@ -1,5 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 
+
+
+
+
+
+
+
 const SUPABASE_URL = "https://evajlksybjhnqvrykimf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV2YWpsa3N5YmpobnF2cnlraW1mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2NzY4NjgsImV4cCI6MjA5NjI1Mjg2OH0.WAdG0kvqXNPtgivfZwPxFDOUnmnEk95rYokK0gSRXa4";
 
@@ -59,10 +66,6 @@ function normalize(r) {
   return { id: r.id, word: r.word, wordSr: r.word_sr, translation: r.word_sr || r.translation, ipa: r.ipa || "", partOfSpeech: r.part_of_speech, synonyms: r.synonyms || [], sentences: r.sentences || [], notes: r.notes || "", status: r.status || "new", addedAt: r.added_at, reviewCount: r.review_count || 0, learnedAt: r.learned_at, imageUrl: r.image_url || null };
 }
 
-
-
-
-
 function formatDate(iso) {
   const d = new Date(iso);
   return d.toLocaleDateString("sr-RS", { day: "2-digit", month: "short", year: "numeric" });
@@ -98,13 +101,7 @@ export default function VocabTracker() {
   const [saving, setSaving] = useState(false);
   const debounceRef = useRef(null);
 
-  useEffect(() => {
-    db.getAll().then(rows => {
-      if (Array.isArray(rows)) setWords(rows.map(normalize));
-      else setDbError("Greška pri učitavanju. Provjeri Supabase RLS podešavanja.");
-      setLoading(false);
-    }).catch(() => { setDbError("Ne mogu se spojiti na bazu."); setLoading(false); });
-  }, []);
+
 
   const showToast = (msg, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 2500); };
 
@@ -167,7 +164,7 @@ export default function VocabTracker() {
     const w = words.find(x => x.id === id);
     const learnedAt = status === "known" ? new Date().toISOString() : null;
     await db.updateStatus(id, status, w?.reviewCount || 0, learnedAt);
-    setWords(prev => prev.map(x => x.id === id ? { ...x, status, reviewCount: (x.reviewCount || 0) + 1, learnedAt: learnedAt !== undefined ? learnedAt : x.learnedAt } : x));
+    setWords(prev => prev.map(x => x.id === id ? { ...x, status, reviewCount: (x.reviewCount || 0) + 1, learnedAt } : x));
   };
 
   const deleteWord = async (id) => {
@@ -215,7 +212,7 @@ export default function VocabTracker() {
       const data = await res.json();
       const text = data.content?.find(b => b.type === "text")?.text || "";
       const ai = JSON.parse(text.replace(/```json|```/g, "").trim());
-      const row = await db.insert({ word: ai.wordEn || word.trim(), wordSr: ai.wordSr, translation: ai.wordSr, ipa: ai.ipa || "", partOfSpeech: ai.partOfSpeech, synonyms: ai.synonyms || [], sentences: ai.sentences, notes: "" });
+      const row = await db.insert({ word: ai.wordEn || word.trim(), wordSr: ai.wordSr, translation: ai.wordSr, ipa: ai.ipa || "", partOfSpeech: ai.partOfSpeech, synonyms: ai.synonyms || [], sentences: ai.sentences, notes: "", imageUrl: null });
       if (row) setWords(prev => [normalize(row), ...prev]);
       showToast(`"${ai.wordEn}" dodato u rečnik ✓`);
     } catch (e) { showToast("Greška, pokušaj ponovo", "#ef4444"); }
@@ -331,7 +328,6 @@ export default function VocabTracker() {
   };
 
   const fetchImage = async (word, cachedUrl = null, wordId = null) => {
-    // Use cached URL — zero API calls
     if (cachedUrl) {
       setWordImage({ url: cachedUrl, cached: true });
       return;
@@ -344,7 +340,6 @@ export default function VocabTracker() {
       if (photo) {
         const imgUrl = photo.urls.small;
         setWordImage({ url: imgUrl, author: photo.user.name, authorUrl: photo.user.links.html });
-        // Save URL to DB so next time no API call needed
         if (wordId) {
           await db.updateImageUrl(wordId, imgUrl);
           setWords(prev => prev.map(w => w.id === wordId ? { ...w, imageUrl: imgUrl } : w));
@@ -432,6 +427,9 @@ export default function VocabTracker() {
       iframe.contentWindow.onafterprint = () => document.body.removeChild(iframe);
     }, 600);
   };
+
+  if (loading) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", color: "#6366f1", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
+  if (dbError) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
 
   if (loading) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", color: "#6366f1", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
   if (dbError) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
@@ -625,7 +623,8 @@ export default function VocabTracker() {
                       autoFocus
                       style={{ flex: 1, background: "#12121a", border: "1px solid #6366f1", color: "#f0ebe3", padding: "8px 12px", borderRadius: 8, fontSize: 18, fontFamily: "Georgia, serif" }}
                     />
-                    <button onClick={() => {
+                    <button onClick={async () => {
+                      await db.updateTranslation(selected.id, editTranslationVal);
                       setWords(prev => prev.map(w => w.id === selected.id ? { ...w, wordSr: editTranslationVal, translation: editTranslationVal } : w));
                       setSelected(prev => ({ ...prev, wordSr: editTranslationVal, translation: editTranslationVal }));
                       setEditingTranslation(false);
@@ -851,25 +850,27 @@ export default function VocabTracker() {
                       setSelected(w); setView("detail"); fetchImage(w.word, w.imageUrl, w.id);
                     }
                   }}
-                  style={{ background: combineMode && selectedIds.includes(w.id) ? "linear-gradient(135deg, #312e81, #4338ca)" : w.status === "known" ? "linear-gradient(135deg, #14532d, #166534)" : w.status === "learning" ? "linear-gradient(135deg, #4a0d1f, #6b1530)" : "linear-gradient(135deg, #1e3a5f, #1e3a8a)", border: "2px solid " + (combineMode && selectedIds.includes(w.id) ? "#818cf8" : w.status === "known" ? "#4ade80" : w.status === "learning" ? "#e11d48" : "#60a5fa"), borderRadius: 12, padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: combineMode && selectedIds.includes(w.id) ? "0 0 16px rgba(129,140,248,0.4)" : "none", transition: "all 0.15s" }}
+                  style={{ background: combineMode && selectedIds.includes(w.id) ? "linear-gradient(135deg, #312e81, #4338ca)" : w.status === "known" ? "linear-gradient(135deg, #14532d, #166534)" : w.status === "learning" ? "linear-gradient(135deg, #4a0d1f, #6b1530)" : "linear-gradient(135deg, #1e3a5f, #1e3a8a)", border: "2px solid " + (combineMode && selectedIds.includes(w.id) ? "#818cf8" : w.status === "known" ? "#4ade80" : w.status === "learning" ? "#e11d48" : "#60a5fa"), borderRadius: 12, padding: "12px 16px", cursor: "pointer", display: "flex", flexDirection: "column", boxShadow: combineMode && selectedIds.includes(w.id) ? "0 0 16px rgba(129,140,248,0.4)" : "none", transition: "all 0.15s" }}
                   onMouseEnter={e => { if (!combineMode) e.currentTarget.style.opacity = "0.9"; }}
                   onMouseLeave={e => { if (!combineMode) e.currentTarget.style.opacity = "1"; }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {/* Tekst: reč + IPA + prevod */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: combineMode ? 0 : 8 }}>
                     {combineMode && (
                       <div style={{ width: 20, height: 20, borderRadius: 4, border: "2px solid " + (selectedIds.includes(w.id) ? "#818cf8" : "rgba(255,255,255,0.3)"), background: selectedIds.includes(w.id) ? "#6366f1" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, color: "#fff" }}>
                         {selectedIds.includes(w.id) ? "✓" : ""}
                       </div>
                     )}
-                    <div>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 2 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", marginBottom: 2 }}>
                         <div style={{ fontSize: 17, fontStyle: "italic", fontWeight: 700, color: "#fff" }}>{w.word}</div>
-                        {w.ipa && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", fontFamily: "monospace" }}>{w.ipa}</div>}
+                        {w.ipa && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontFamily: "monospace" }}>{w.ipa}</div>}
                       </div>
                       {w.translation && <div style={{ fontSize: 12, color: "#fff" }}>{w.translation}</div>}
                     </div>
                   </div>
+                  {/* Kružići u posebnom redu */}
                   {!combineMode && (
-                    <div style={{ display: "flex", gap: 5 }}>
+                    <div style={{ display: "flex", gap: 5, justifyContent: "flex-end" }}>
                       {[["★","new","#3b82f6","Novo"],["?","learning","#e11d48","Učim"],["✓","known","#22c55e","Znam"]].map(([label, s, color, tip]) => (
                         <div key={s} style={{ position: "relative" }}>
                           <button onClick={e => { e.stopPropagation(); updateStatus(w.id, s); }}
