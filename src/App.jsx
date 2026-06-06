@@ -500,10 +500,13 @@ export default function VocabTracker() {
       } else if (authView === "register" && !data.access_token) {
         setAuthError("Registracija uspješna! Provjeri email i potvrdi nalog, zatim se prijavi.");
       } else if (data.access_token) {
-        localStorage.setItem("sb_token", data.access_token);
-        setToken(data.access_token);
-        setUser(data.user);
-        const rows = await db.getAll(data.access_token);
+        const t = data.access_token;
+        localStorage.setItem("sb_token", t);
+        setToken(t);
+        // user can be in data.user or need separate fetch
+        const u = data.user || await supabaseAuth.getUser(t);
+        setUser(u);
+        const rows = await db.getAll(t);
         if (Array.isArray(rows)) setWords(rows.map(normalize));
       }
     } catch (e) { setAuthError("Greška pri povezivanju. Pokušaj ponovo."); }
