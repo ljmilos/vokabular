@@ -14,7 +14,7 @@ const db = {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary`, {
       method: "POST",
       headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", "Prefer": "return=representation" },
-      body: JSON.stringify({ word: w.word, word_sr: w.wordSr, translation: w.translation, ipa: w.ipa, part_of_speech: w.partOfSpeech, synonyms: w.synonyms, sentences: w.sentences, notes: w.notes, status: "new", review_count: 0 })
+      body: JSON.stringify({ word: w.word, word_sr: w.wordSr, translation: w.translation, ipa: w.ipa, part_of_speech: w.partOfSpeech, synonyms: w.synonyms, sentences: w.sentences, notes: w.notes, status: "new", review_count: 0, image_url: w.imageUrl || null })
     });
     const data = await res.json();
     return data[0];
@@ -40,6 +40,13 @@ const db = {
       body: JSON.stringify({ word_sr: wordSr, translation: wordSr })
     });
   },
+  async updateImageUrl(id, imageUrl) {
+    await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ image_url: imageUrl })
+    });
+  },
   async delete(id) {
     await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?id=eq.${id}`, {
       method: "DELETE",
@@ -49,7 +56,7 @@ const db = {
 };
 
 function normalize(r) {
-  return { id: r.id, word: r.word, wordSr: r.word_sr, translation: r.word_sr || r.translation, ipa: r.ipa || "", partOfSpeech: r.part_of_speech, synonyms: r.synonyms || [], sentences: r.sentences || [], notes: r.notes || "", status: r.status || "new", addedAt: r.added_at, reviewCount: r.review_count || 0, learnedAt: r.learned_at };
+  return { id: r.id, word: r.word, wordSr: r.word_sr, translation: r.word_sr || r.translation, ipa: r.ipa || "", partOfSpeech: r.part_of_speech, synonyms: r.synonyms || [], sentences: r.sentences || [], notes: r.notes || "", status: r.status || "new", addedAt: r.added_at, reviewCount: r.review_count || 0, learnedAt: r.learned_at, imageUrl: r.image_url || null };
 }
 
 
@@ -148,7 +155,7 @@ export default function VocabTracker() {
     if (duplicate) { showToast("Reč već postoji!", "#f59e0b"); return; }
     setSaving(true);
     try {
-      const row = await db.insert({ word: aiData.wordEn || wordInput.trim(), wordSr: aiData.wordSr, translation: aiData.wordSr, ipa: aiData.ipa || "", partOfSpeech: aiData.partOfSpeech, synonyms: aiData.synonyms || [], sentences: aiData.sentences, notes: notes.trim() });
+      const row = await db.insert({ word: aiData.wordEn || wordInput.trim(), wordSr: aiData.wordSr, translation: aiData.wordSr, ipa: aiData.ipa || "", partOfSpeech: aiData.partOfSpeech, synonyms: aiData.synonyms || [], sentences: aiData.sentences, notes: notes.trim(), imageUrl: null });
       if (row) setWords(prev => [normalize(row), ...prev]);
       setWordInput(""); setAiData(null); setNotes(""); setView("list");
       showToast("Reč sačuvana u bazu ✓");
@@ -323,14 +330,25 @@ export default function VocabTracker() {
     );
   };
 
-  const fetchImage = async (word) => {
+  const fetchImage = async (word, cachedUrl = null, wordId = null) => {
+    // Use cached URL — zero API calls
+    if (cachedUrl) {
+      setWordImage({ url: cachedUrl, cached: true });
+      return;
+    }
     setWordImage(null); setImageLoading(true);
     try {
       const res = await fetch(`/api/unsplash?query=${encodeURIComponent(word)}`);
       const data = await res.json();
       const photo = data.results?.[0];
       if (photo) {
-        setWordImage({ url: photo.urls.small, author: photo.user.name, authorUrl: photo.user.links.html });
+        const imgUrl = photo.urls.small;
+        setWordImage({ url: imgUrl, author: photo.user.name, authorUrl: photo.user.links.html });
+        // Save URL to DB so next time no API call needed
+        if (wordId) {
+          await db.updateImageUrl(wordId, imgUrl);
+          setWords(prev => prev.map(w => w.id === wordId ? { ...w, imageUrl: imgUrl } : w));
+        }
       }
     } catch (e) { setWordImage(null); }
     setImageLoading(false);
@@ -825,7 +843,7 @@ export default function VocabTracker() {
                     if (combineMode) {
                       setSelectedIds(prev => prev.includes(w.id) ? prev.filter(id => id !== w.id) : [...prev, w.id]);
                     } else {
-                      setSelected(w); setView("detail"); fetchImage(w.word);
+                      setSelected(w); setView("detail"); fetchImage(w.word, w.imageUrl, w.id);
                     }
                   }}
                   style={{ background: combineMode && selectedIds.includes(w.id) ? "linear-gradient(135deg, #312e81, #4338ca)" : w.status === "known" ? "linear-gradient(135deg, #14532d, #166534)" : w.status === "learning" ? "linear-gradient(135deg, #4a0d1f, #6b1530)" : "linear-gradient(135deg, #1e3a5f, #1e3a8a)", border: "2px solid " + (combineMode && selectedIds.includes(w.id) ? "#818cf8" : w.status === "known" ? "#4ade80" : w.status === "learning" ? "#e11d48" : "#60a5fa"), borderRadius: 12, padding: "14px 18px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: combineMode && selectedIds.includes(w.id) ? "0 0 16px rgba(129,140,248,0.4)" : "none", transition: "all 0.15s" }}
