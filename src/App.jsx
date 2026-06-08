@@ -117,6 +117,7 @@ export default function VocabTracker() {
 
   const [words, setWords] = useState([]);
   const [view, setView] = useState("list");
+  const [layoutView, setLayoutView] = useState("list"); // NEW: "list" | "board"
   const [wordInput, setWordInput] = useState("");
   const [aiData, setAiData] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -132,7 +133,15 @@ export default function VocabTracker() {
   const [dbError, setDbError] = useState(null);
   const [regenLoading, setRegenLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [isMobile, setIsMobile] = useState(typeof window !== "undefined" && window.innerWidth < 600); // NEW
   const debounceRef = useRef(null);
+
+  // NEW: track screen width
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 600);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
 
   useEffect(() => {
     const hash = window.location.hash;
@@ -504,29 +513,33 @@ export default function VocabTracker() {
       )}
       {toast && <div style={{ position: "fixed", top: 20, right: 20, zIndex: 999, background: toast.color, color: "#fff", padding: "10px 20px", borderRadius: 8, fontFamily: "monospace", fontSize: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.5)" }}>{toast.msg}</div>}
 
+      {/* HEADER */}
       <div style={{ background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)", borderBottom: "1px solid #2a2a3e", padding: "24px 24px 20px" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16 }}>
-          <div>
-            <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Vokabular Tracker</div>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: "normal", letterSpacing: -0.5 }}>Moje Engleske Reči</h1>
-            <div style={{ fontSize: 10, color: "#3a3a5e", fontFamily: "monospace", marginTop: 4 }}>● Supabase Cloud</div>
+        <div style={{ maxWidth: 760, margin: "0 auto", width: "100%" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16 }}>
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Vokabular Tracker</div>
+              <h1 style={{ margin: 0, fontSize: 26, fontWeight: "normal", letterSpacing: -0.5 }}>Moje Engleske Reči</h1>
+              <div style={{ fontSize: 10, color: "#3a3a5e", fontFamily: "monospace", marginTop: 4 }}>● Supabase Cloud</div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+              <div style={{ fontSize: 11, color: "#555", fontFamily: "monospace" }}>{user.email}</div>
+              <button onClick={() => { supabaseAuth.signOut(token); localStorage.removeItem("sb_token"); setUser(null); setToken(null); setWords([]); }} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>odjavi se</button>
+            </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-            <div style={{ fontSize: 11, color: "#555", fontFamily: "monospace" }}>{user.email}</div>
-            <button onClick={() => { supabaseAuth.signOut(token); localStorage.removeItem("sb_token"); setUser(null); setToken(null); setWords([]); }} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>odjavi se</button>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {["all", "new", "learning", "known"].map(s => (
+              <button key={s} onClick={() => setFilter(s)} style={{ background: filter === s ? "#6366f1" : "rgba(255,255,255,0.05)", border: "1px solid " + (filter === s ? "#6366f1" : "#2a2a3e"), color: filter === s ? "#fff" : "#888", padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>
+                {s === "all" ? "Sve" : statusLabel(s)} ({counts[s]})
+              </button>
+            ))}
           </div>
-        </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {["all", "new", "learning", "known"].map(s => (
-            <button key={s} onClick={() => setFilter(s)} style={{ background: filter === s ? "#6366f1" : "rgba(255,255,255,0.05)", border: "1px solid " + (filter === s ? "#6366f1" : "#2a2a3e"), color: filter === s ? "#fff" : "#888", padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>
-              {s === "all" ? "Sve" : statusLabel(s)} ({counts[s]})
-            </button>
-          ))}
         </div>
       </div>
 
+      {/* ADD VIEW */}
       {view === "add" && (
-        <div style={{ padding: 24, maxWidth: 620 }}>
+        <div style={{ padding: 24, maxWidth: 760, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
             <button onClick={() => setView("list")} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: "normal" }}>Nova Reč</h2>
@@ -581,8 +594,9 @@ export default function VocabTracker() {
         </button>
       )}
 
+      {/* DETAIL VIEW */}
       {view === "detail" && selected && (
-        <div style={{ padding: 24, maxWidth: 620 }}>
+        <div style={{ padding: 24, maxWidth: 760, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
           <div style={{ display: "flex", gap: 12, marginBottom: 24 }}>
             <button onClick={() => { setView("list"); setWordImage(null); }} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
           </div>
@@ -660,6 +674,7 @@ export default function VocabTracker() {
         </div>
       )}
 
+      {/* REVIEW VIEW */}
       {view === "review" && (
         <div style={{ padding: 24, maxWidth: 540, margin: "0 auto" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
@@ -707,15 +722,25 @@ export default function VocabTracker() {
         </div>
       )}
 
+      {/* LIST VIEW */}
       {view === "list" && (
-        <div style={{ padding: 24, paddingBottom: 90 }}>
+        <div style={{ padding: 24, paddingBottom: 90, maxWidth: 760, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
+          {/* Actions bar */}
           <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pretraži..." style={{ flex: 1, minWidth: 120, background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#f0ebe3", padding: "10px 14px", borderRadius: 8, fontSize: 14, fontFamily: "Georgia, serif" }} />
             {filteredWords.length > 0 && <button onClick={exportPDF} style={{ background: "rgba(99,102,241,0.15)", border: "1px solid #6366f1", color: "#a5b4fc", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>↓ PDF</button>}
             <button onClick={() => { setCombineMode(!combineMode); setSelectedIds([]); setCombineResult(null); }} style={{ background: combineMode ? "#6366f1" : "rgba(99,102,241,0.15)", border: "1px solid #6366f1", color: combineMode ? "#fff" : "#a5b4fc", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>⊕ Kombiniraj</button>
             {reviewWords.length > 0 && <button onClick={() => { setView("review"); setReviewIndex(0); setRevealed(false); }} style={{ background: "#f59e0b", border: "none", color: "#fff", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>🔁 Ponavljaj ({reviewWords.length})</button>}
+            {/* VIEW SWITCHER */}
+            <div style={{ display: "flex", background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 8, overflow: "hidden" }}>
+              <button onClick={() => setLayoutView("list")} title="Lista"
+                style={{ background: layoutView === "list" ? "#2a2a4e" : "transparent", border: "none", color: layoutView === "list" ? "#a5b4fc" : "#555", padding: "10px 13px", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>☰</button>
+              <button onClick={() => setLayoutView("board")} title="Board"
+                style={{ background: layoutView === "board" ? "#2a2a4e" : "transparent", border: "none", color: layoutView === "board" ? "#a5b4fc" : "#555", padding: "10px 13px", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>⊞</button>
+            </div>
           </div>
 
+          {/* Combine result */}
           {combineResult && (
             <div style={{ background: "#1a1a2e", border: "1px solid #6366f1", borderRadius: 12, padding: 20, marginBottom: 20 }}>
               <div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 12, textTransform: "uppercase", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -746,41 +771,80 @@ export default function VocabTracker() {
             </div>
           )}
 
-          {filteredWords.length === 0 ? (
-            <div style={{ textAlign: "center", color: "#555", padding: 60 }}><div style={{ fontSize: 40, marginBottom: 16 }}>📖</div><div>Nema reči. Klikni + DODAJ!</div></div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {filteredWords.map(w => (
-                <div key={w.id} onClick={() => { if (combineMode) { setSelectedIds(prev => prev.includes(w.id) ? prev.filter(id => id !== w.id) : [...prev, w.id]); } else { setSelected(w); setView("detail"); fetchImage(w.word, w.imageUrl, w.id); } }}
-                  style={{ background: combineMode && selectedIds.includes(w.id) ? "linear-gradient(135deg, #312e81, #4338ca)" : w.status === "known" ? "linear-gradient(135deg, #14532d, #166534)" : w.status === "learning" ? "linear-gradient(135deg, #4a0d1f, #6b1530)" : "linear-gradient(135deg, #1e3a5f, #1e3a8a)", border: "2px solid " + (combineMode && selectedIds.includes(w.id) ? "#818cf8" : w.status === "known" ? "#4ade80" : w.status === "learning" ? "#e11d48" : "#60a5fa"), borderRadius: 12, padding: "12px 16px", cursor: "pointer", display: "flex", flexDirection: "column", boxShadow: combineMode && selectedIds.includes(w.id) ? "0 0 16px rgba(129,140,248,0.4)" : "none", transition: "all 0.15s" }}
-                  onMouseEnter={e => { if (!combineMode) e.currentTarget.style.opacity = "0.9"; }} onMouseLeave={e => { if (!combineMode) e.currentTarget.style.opacity = "1"; }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: combineMode ? 0 : 8 }}>
-                    {combineMode && <div style={{ width: 20, height: 20, borderRadius: 4, border: "2px solid " + (selectedIds.includes(w.id) ? "#818cf8" : "rgba(255,255,255,0.3)"), background: selectedIds.includes(w.id) ? "#6366f1" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, color: "#fff" }}>{selectedIds.includes(w.id) ? "✓" : ""}</div>}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", marginBottom: 2 }}>
-                        <div style={{ fontSize: 17, fontStyle: "italic", fontWeight: 700, color: "#fff" }}>{w.word}</div>
-                        {w.ipa && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontFamily: "monospace" }}>{w.ipa}</div>}
-                      </div>
-                      {w.translation && <div style={{ fontSize: 12, color: "#fff" }}>{w.translation}</div>}
+          {/* BOARD VIEW */}
+          {layoutView === "board" && (
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: 12, alignItems: "start" }}>
+              {[["new","★ Novo","#3b82f6","rgba(59,130,246,0.08)"],["learning","? Učim","#e11d48","rgba(225,29,72,0.08)"],["known","✓ Znam","#22c55e","rgba(34,197,94,0.08)"]].map(([status, label, color, bg]) => {
+                const col = words.filter(w => w.status === status && (search ? w.word.toLowerCase().includes(search.toLowerCase()) || w.translation?.toLowerCase().includes(search.toLowerCase()) : true));
+                return (
+                  <div key={status} style={{ background: bg, border: "1px solid " + color + "33", borderRadius: 12, overflow: "hidden" }}>
+                    <div style={{ padding: "10px 14px", borderBottom: "1px solid " + color + "33", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 12, fontFamily: "monospace", color: color, letterSpacing: 1 }}>{label}</span>
+                      <span style={{ fontSize: 11, background: color + "22", color: color, borderRadius: 10, padding: "2px 8px", fontFamily: "monospace" }}>{col.length}</span>
                     </div>
-                  </div>
-                  {!combineMode && (
-                    <div style={{ display: "flex", gap: 5, justifyContent: "flex-end" }}>
-                      {[["★","new","#3b82f6","Novo"],["?","learning","#e11d48","Učim"],["✓","known","#22c55e","Znam"]].map(([label, s, color, tip]) => (
-                        <div key={s} style={{ position: "relative" }}>
-                          <button onClick={e => { e.stopPropagation(); updateStatus(w.id, s); }} style={{ background: w.status === s ? color : "transparent", border: "1px solid " + (w.status === s ? color : "rgba(255,255,255,0.2)"), color: w.status === s ? "#fff" : "rgba(255,255,255,0.25)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>{label}</button>
-                          <div className="tip" style={{ position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#fff", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>{tip}</div>
+                    <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 6, minHeight: 60 }}>
+                      {col.length === 0 && <div style={{ color: "#333", fontSize: 12, textAlign: "center", padding: "16px 0" }}>—</div>}
+                      {col.map(w => (
+                        <div key={w.id} onClick={() => { setSelected(w); setView("detail"); fetchImage(w.word, w.imageUrl, w.id); }}
+                          style={{ background: "#0f0f1a", border: "1px solid #1e1e2e", borderRadius: 8, padding: "10px 12px", cursor: "pointer", transition: "border-color 0.15s" }}
+                          onMouseEnter={e => e.currentTarget.style.borderColor = color + "88"}
+                          onMouseLeave={e => e.currentTarget.style.borderColor = "#1e1e2e"}>
+                          <div style={{ fontSize: 14, fontStyle: "italic", color: "#f0ebe3", fontWeight: "bold", marginBottom: 2 }}>{w.word}</div>
+                          {w.ipa && <div style={{ fontSize: 11, color: "#6366f1", fontFamily: "monospace", marginBottom: 3 }}>{w.ipa}</div>}
+                          {w.translation && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>{w.translation}</div>}
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            {[["★","new","#3b82f6"],["?","learning","#e11d48"],["✓","known","#22c55e"]].map(([lbl, s, c]) => (
+                              <button key={s} onClick={e => { e.stopPropagation(); updateStatus(w.id, s); }}
+                                style={{ background: w.status === s ? c : "transparent", border: "1px solid " + (w.status === s ? c : "rgba(255,255,255,0.15)"), color: w.status === s ? "#fff" : "rgba(255,255,255,0.2)", width: 22, height: 22, borderRadius: "50%", cursor: "pointer", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{lbl}</button>
+                            ))}
+                          </div>
                         </div>
                       ))}
-                      <div style={{ position: "relative" }}>
-                        <button onClick={e => { e.stopPropagation(); if (window.confirm(`Obrisati "${w.word}"?`)) deleteWord(w.id); }} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.3)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.15)"; e.currentTarget.style.color = "#fff"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.3)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>✕</button>
-                        <div className="tip" style={{ position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#fff", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>Briši</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* LIST VIEW */}
+          {layoutView === "list" && (
+            filteredWords.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#555", padding: 60 }}><div style={{ fontSize: 40, marginBottom: 16 }}>📖</div><div>Nema reči. Klikni + DODAJ!</div></div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {filteredWords.map(w => (
+                  <div key={w.id} onClick={() => { if (combineMode) { setSelectedIds(prev => prev.includes(w.id) ? prev.filter(id => id !== w.id) : [...prev, w.id]); } else { setSelected(w); setView("detail"); fetchImage(w.word, w.imageUrl, w.id); } }}
+                    style={{ background: combineMode && selectedIds.includes(w.id) ? "linear-gradient(135deg, #312e81, #4338ca)" : w.status === "known" ? "linear-gradient(135deg, #14532d, #166534)" : w.status === "learning" ? "linear-gradient(135deg, #4a0d1f, #6b1530)" : "linear-gradient(135deg, #1e3a5f, #1e3a8a)", border: "2px solid " + (combineMode && selectedIds.includes(w.id) ? "#818cf8" : w.status === "known" ? "#4ade80" : w.status === "learning" ? "#e11d48" : "#60a5fa"), borderRadius: 12, padding: "12px 16px", cursor: "pointer", display: "flex", flexDirection: "column", boxShadow: combineMode && selectedIds.includes(w.id) ? "0 0 16px rgba(129,140,248,0.4)" : "none", transition: "all 0.15s" }}
+                    onMouseEnter={e => { if (!combineMode) e.currentTarget.style.opacity = "0.9"; }} onMouseLeave={e => { if (!combineMode) e.currentTarget.style.opacity = "1"; }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: combineMode ? 0 : 8 }}>
+                      {combineMode && <div style={{ width: 20, height: 20, borderRadius: 4, border: "2px solid " + (selectedIds.includes(w.id) ? "#818cf8" : "rgba(255,255,255,0.3)"), background: selectedIds.includes(w.id) ? "#6366f1" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, color: "#fff" }}>{selectedIds.includes(w.id) ? "✓" : ""}</div>}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", marginBottom: 2 }}>
+                          <div style={{ fontSize: 17, fontStyle: "italic", fontWeight: 700, color: "#fff" }}>{w.word}</div>
+                          {w.ipa && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontFamily: "monospace" }}>{w.ipa}</div>}
+                        </div>
+                        {w.translation && <div style={{ fontSize: 12, color: "#fff" }}>{w.translation}</div>}
                       </div>
                     </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                    {!combineMode && (
+                      <div style={{ display: "flex", gap: 5, justifyContent: "flex-end" }}>
+                        {[["★","new","#3b82f6","Novo"],["?","learning","#e11d48","Učim"],["✓","known","#22c55e","Znam"]].map(([label, s, color, tip]) => (
+                          <div key={s} style={{ position: "relative" }}>
+                            <button onClick={e => { e.stopPropagation(); updateStatus(w.id, s); }} style={{ background: w.status === s ? color : "transparent", border: "1px solid " + (w.status === s ? color : "rgba(255,255,255,0.2)"), color: w.status === s ? "#fff" : "rgba(255,255,255,0.25)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>{label}</button>
+                            <div className="tip" style={{ position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#fff", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>{tip}</div>
+                          </div>
+                        ))}
+                        <div style={{ position: "relative" }}>
+                          <button onClick={e => { e.stopPropagation(); if (window.confirm(`Obrisati "${w.word}"?`)) deleteWord(w.id); }} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.3)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.15)"; e.currentTarget.style.color = "#fff"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.3)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>✕</button>
+                          <div className="tip" style={{ position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#fff", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>Briši</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
           )}
         </div>
       )}
