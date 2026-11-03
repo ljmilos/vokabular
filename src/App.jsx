@@ -143,6 +143,8 @@ export default function VocabTracker() {
   const [selected, setSelected] = useState(null);
   const [reviewIndex, setReviewIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
+  const [practiceShuffle, setPracticeShuffle] = useState(false);
+  const [practiceAnswers, setPracticeAnswers] = useState({});
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [themeId, setThemeId] = useState(() => {
@@ -296,7 +298,9 @@ export default function VocabTracker() {
   );
   const filteredWords = searchedWords.filter(w => filter === "all" || w.status === filter);
 
-  const reviewWords = words.filter(w => w.status === "learning");
+  const reviewWords = words.filter(w => w.status === "learning").sort((a, b) =>
+    practiceShuffle ? String(a.id).localeCompare(String(b.id)) : (a.addedAt || "").localeCompare(b.addedAt || "")
+  );
   const currentReview = reviewWords[reviewIndex];
   const statusLabel = s => ({ new: "Novo", learning: "Učim", known: "Znam" }[s] || s);
   const statusDot = s => ({ new: "#3b82f6", learning: "#f59e0b", known: "#22c55e" }[s] || "var(--v-muted)");
@@ -503,6 +507,25 @@ export default function VocabTracker() {
     setAuthLoading(false);
   };
 
+  const practiceAdvance = () => {
+    setReviewIndex(i => reviewWords.length ? (i + 1) % reviewWords.length : 0);
+    setRevealed(false);
+  };
+  const practiceRate = async (rating) => {
+    if (!currentReview) return;
+    const id = currentReview.id;
+    setPracticeAnswers(prev => ({ ...prev, [id]: rating }));
+    if (rating === "known") {
+      // Reč nestaje iz skupa "Učim", zato zadržavamo isti indeks za sledeću karticu.
+      setReviewIndex(i => reviewWords.length <= 1 ? 0 : (i >= reviewWords.length - 1 ? 0 : i));
+      setRevealed(false);
+      await updateStatus(id, "known");
+    } else {
+      // "Ne znam" i "Teško" zadržavaju postojeći status Učim.
+      practiceAdvance();
+    }
+  };
+
   if (loading) return <div style={{ minHeight: "100vh", background: "var(--v-bg)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--v-accent)", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
   if (dbError) return <div style={{ minHeight: "100vh", background: "var(--v-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "var(--v-dangerBg)", border: "1px solid var(--v-dangerBorder)", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
 
@@ -608,13 +631,13 @@ export default function VocabTracker() {
           </div>
           <div className="vocab-topnav" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
             {[["home", "⌂  Početna"], ["dictionary", "▤  Rečnik"]].map(([id, label]) => (
-              <button key={id} onClick={() => { setWorkspaceTab(id); setView("list"); }}
-                style={{ border: "1px solid " + (workspaceTab === id ? "var(--v-accent)" : "var(--v-border)"), background: workspaceTab === id ? "var(--v-accent)" : "var(--v-panel)", color: workspaceTab === id ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
+              <button key={id} onClick={() => { setWorkspaceTab(id); setView("list"); setCombineMode(false); }}
+                style={{ border: "1px solid " + ((view === "list" && workspaceTab === id) ? "var(--v-accent)" : "var(--v-border)"), background: (view === "list" && workspaceTab === id) ? "var(--v-accent)" : "var(--v-panel)", color: (view === "list" && workspaceTab === id) ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
                 {label}
               </button>
             ))}
             <button onClick={() => { setView("review"); setReviewIndex(0); setRevealed(false); }} disabled={reviewWords.length === 0}
-              style={{ border: "1px solid var(--v-border)", background: "var(--v-panel)", color: "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: reviewWords.length ? 1 : 0.5 }}>
+              style={{ border: "1px solid " + (view === "review" ? "var(--v-accent)" : "var(--v-border)"), background: view === "review" ? "var(--v-accent)" : "var(--v-panel)", color: view === "review" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: reviewWords.length ? 1 : 0.5 }}>
               ◎  Vežbanje
             </button>
             <button onClick={() => { setWorkspaceTab("dictionary"); setView("add"); setWordInput(""); setAiData(null); setNotes(""); }}
@@ -769,52 +792,90 @@ export default function VocabTracker() {
         </div>
       )}
 
-      {/* REVIEW VIEW */}
+      {/* PRACTICE VIEW - polished Arctic Blue reference layout, all themes supported */}
       {view === "review" && (
-        <div style={{ padding: 24, maxWidth: 540, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-            <button onClick={() => { setView("list"); setReviewIndex(0); setRevealed(false); }} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
-            <span style={{ fontSize: 13, color: "var(--v-muted)", fontFamily: "monospace" }}>{reviewIndex + 1} / {reviewWords.length}</span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => { setReviewIndex(i => (i - 1 + reviewWords.length) % reviewWords.length); setRevealed(false); }} style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 16 }}>←</button>
-              <button onClick={() => { setReviewIndex(i => (i + 1) % reviewWords.length); setRevealed(false); }} style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 16 }}>→</button>
+        <main className="vocab-practice-page" style={{ maxWidth: 1320, margin: "0 auto", padding: isMobile ? "22px 14px 48px" : "30px 28px 64px", boxSizing: "border-box" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 15, marginBottom: 24 }}>
+            <div style={{ width: 54, height: 54, display: "grid", placeItems: "center", background: "var(--v-elevated)", borderRadius: 17, color: "var(--v-accent)", fontSize: 28, flexShrink: 0 }}>♧</div>
+            <div style={{ flex: 1 }}>
+              <h2 style={{ fontSize: isMobile ? 25 : 30, margin: "0 0 4px", lineHeight: 1.15 }}>Vežbanje danas</h2>
+              <div style={{ color: "var(--v-muted)", fontSize: 15 }}>{reviewWords.length} reči za ponavljanje</div>
             </div>
+            <button onClick={() => { setView("list"); setWorkspaceTab("dictionary"); }} style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>← Rečnik</button>
           </div>
-          {reviewWords.length === 0 ? (
-            <div style={{ textAlign: "center", color: "var(--v-muted)", padding: 60, fontSize: 18 }}>Nema reči označenih kao "Učim" 📖</div>
-          ) : currentReview && (
-            <div style={{ background: "var(--v-panel)", borderRadius: 20, padding: 36, border: "2px solid #f59e0b", textAlign: "center", display: "flex", flexDirection: "column", gap: 20 }}>
-              <div>
-                <div style={{ fontSize: 11, color: "#f59e0b", fontFamily: "monospace", letterSpacing: 2, marginBottom: 8 }}>KARTICA {reviewIndex + 1} OD {reviewWords.length}</div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-                  <div style={{ fontSize: 38, fontStyle: "italic", fontWeight: 700 }}>{currentReview.word}</div>
-                  <button onClick={() => speak(currentReview.word)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 22, padding: 4, opacity: 0.7 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.7}>🔊</button>
+          <div className="vocab-practice-grid" style={{ display: "grid", gridTemplateColumns: "minmax(210px, .87fr) minmax(0, 1.68fr) minmax(235px, 1fr)", gap: 22, alignItems: "start" }}>
+            <aside className="vocab-practice-stats" style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 18, padding: 18, boxShadow: "0 8px 22px rgba(20,65,120,.035)" }}>
+              {[
+                ["▦", "Spremno danas", reviewWords.length, "var(--v-accent)", "var(--v-newBg)"],
+                ["✓", "Naučeno ukupno", counts.known, "#20a879", "var(--v-knownBg)"],
+                ["▤", "Učim", counts.learning, "var(--v-accent)", "var(--v-selectedBg)"]
+              ].map(([symbol, label, value, color, bg]) => (
+                <div key={label} className="vocab-practice-stat" style={{ display: "flex", gap: 12, alignItems: "center", padding: "15px 12px", borderRadius: 13, border: "1px solid var(--v-border)", background: "var(--v-card)", marginBottom: 10 }}>
+                  <div style={{ width: 42, height: 42, background: bg, color, borderRadius: 12, display: "grid", placeItems: "center", fontSize: 23, flexShrink: 0 }}>{symbol}</div>
+                  <div><div style={{ fontSize: 13, color: "var(--v-text)", marginBottom: 4 }}>{label}</div><div style={{ color: "var(--v-text)", fontSize: 27, fontWeight: 700, lineHeight: 1 }}>{value}</div></div>
                 </div>
-                {currentReview.wordSr && <div style={{ fontSize: 16, color: "var(--v-muted)", marginBottom: 4 }}>{currentReview.wordSr}</div>}
-                {currentReview.partOfSpeech && <div style={{ fontSize: 11, color: "var(--v-muted)", fontFamily: "monospace" }}>{currentReview.partOfSpeech}</div>}
+              ))}
+              <div style={{ borderTop: "1px solid var(--v-border)", marginTop: 17, paddingTop: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}><span style={{ fontSize: 17, fontWeight: 600 }}>Napredak</span><strong style={{ fontSize: 20 }}>{counts.all ? Math.round(counts.known / counts.all * 100) : 0}%</strong></div>
+                <div style={{ background: "var(--v-elevated)", height: 12, borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${counts.all ? counts.known / counts.all * 100 : 0}%`, minWidth: counts.known ? 7 : 0, background: "var(--v-accent)", borderRadius: 99 }}/></div>
               </div>
-              {!revealed ? (
-                <button onClick={() => setRevealed(true)} style={{ background: "var(--v-accent)", border: "none", color: "var(--v-accentText)", padding: "14px 32px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontFamily: "monospace", letterSpacing: 1 }}>POKAŽI PRIMER</button>
+            </aside>
+            <section style={{ minWidth: 0 }}>
+              {!currentReview ? (
+                <div style={{ background: "var(--v-panel)", padding: 40, borderRadius: 20, border: "1px solid var(--v-border)", textAlign: "center" }}>
+                  <div style={{ fontSize: 38, marginBottom: 12 }}>🎉</div><h3>Sve je obnovljeno!</h3><p style={{ color: "var(--v-muted)" }}>Nema više reči u kategoriji „Učim“.</p>
+                  <button onClick={() => { setWorkspaceTab("dictionary"); setView("list"); }} style={{ background: "var(--v-accent)", color: "var(--v-accentText)", border: "none", borderRadius: 10, padding: "12px 18px", cursor: "pointer" }}>Otvori rečnik</button>
+                </div>
               ) : (
-                <div>
-                  {currentReview.sentences?.[0] && (
-                    <div style={{ fontSize: 13, padding: "12px 16px", background: "rgba(99,102,241,0.08)", borderRadius: 8, marginBottom: 16, textAlign: "left" }}>
-                      <div style={{ color: "var(--v-text)", fontStyle: "italic", lineHeight: 1.6, marginBottom: 4 }}>{highlightWord(currentReview.sentences[0].en || currentReview.sentences[0], currentReview.word)}</div>
-                      {currentReview.sentences[0].sr && <div style={{ color: "#666", fontSize: 12, fontStyle: "italic" }}>↳ {currentReview.sentences[0].sr}</div>}
+                <div className="vocab-practice-card" style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderLeft: "5px solid var(--v-accent)", borderRadius: 22, padding: isMobile ? "20px 18px" : "25px 27px", boxShadow: "0 10px 30px rgba(20,65,120,.07)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ borderRadius: 40, background: "var(--v-elevated)", border: "1px solid var(--v-border)", padding: "6px 13px", color: "var(--v-accentSoft)", fontFamily: "monospace", fontSize: 13 }}>{reviewIndex + 1} / {reviewWords.length}</span>
+                    <span title="Reč u kategoriji Učim" style={{ borderRadius: "50%", color: "var(--v-accentSoft)", border: "1px solid var(--v-border)", width: 37, height: 37, display: "grid", placeItems: "center", fontSize: 22 }}>☆</span>
+                  </div>
+                  <div style={{ textAlign: "center", padding: "10px 0 17px" }}>
+                    <div style={{ fontSize: isMobile ? 34 : 46, fontStyle: "italic", fontWeight: 700, lineHeight: 1.25, overflowWrap: "anywhere", marginBottom: 7 }}>{currentReview.word}</div>
+                    {currentReview.ipa && <div style={{ color: "var(--v-muted)", fontFamily: "monospace", fontSize: 14 }}>{currentReview.ipa}</div>}
+                    {!revealed && <div style={{ fontSize: 17, color: "var(--v-muted)", marginTop: 25 }}>Kako se prevodi na srpski?</div>}
+                  </div>
+                  {!revealed ? (
+                    <div style={{ textAlign: "center", padding: "0 0 10px" }}><button onClick={() => setRevealed(true)} style={{ background: "var(--v-action)", color: "#fff", border: "none", borderRadius: 28, padding: "14px 35px", fontSize: 16, fontWeight: 700, cursor: "pointer", boxShadow: "0 5px 12px rgba(210,138,41,.2)", minWidth: 210 }}>Prikaži odgovor</button></div>
+                  ) : (
+                    <div style={{ padding: "4px 0 0" }}>
+                      <div style={{ background: "var(--v-knownBg)", color: "#138451", padding: "15px 14px", borderRadius: 12, textAlign: "center", fontSize: 24, fontWeight: 700, marginBottom: 16 }}>✓ {currentReview.wordSr || currentReview.translation || "Nema prevoda"}</div>
+                      <div className="vocab-practice-actions" style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 10 }}>
+                        <button onClick={() => practiceRate("again")} style={{ background: "var(--v-dangerBg)", color: "#e11d48", border: "1px solid #ec8da0", borderRadius: 11, padding: "13px 3px", fontWeight: 700, cursor: "pointer" }}>? Ne znam</button>
+                        <button onClick={() => practiceRate("hard")} style={{ background: "var(--v-card)", color: "var(--v-action)", border: "1px solid var(--v-action)", borderRadius: 11, padding: "13px 3px", fontWeight: 700, cursor: "pointer" }}>◔ Teško</button>
+                        <button onClick={() => practiceRate("known")} style={{ background: "var(--v-knownBg)", color: "#138451", border: "1px solid #4bbc8b", borderRadius: 11, padding: "13px 3px", fontWeight: 700, cursor: "pointer" }}>✓ Znam</button>
+                      </div>
+                      {currentReview.sentences?.[0] && <details style={{ background: "var(--v-card)", borderRadius: 10, padding: "10px 12px", marginTop: 14, color: "var(--v-muted)", fontSize: 13 }}><summary style={{ cursor: "pointer" }}>Primer upotrebe</summary><div style={{ marginTop: 10 }}>{currentReview.sentences[0].en || currentReview.sentences[0]}</div>{currentReview.sentences[0].sr && <div style={{ fontStyle: "italic", marginTop: 6 }}>↳ {currentReview.sentences[0].sr}</div>}</details>}
                     </div>
                   )}
-                  <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-                    <button onClick={() => { updateStatus(currentReview.id, "new"); setReviewIndex(i => (i + 1) % reviewWords.length); setRevealed(false); }} style={{ background: "#3b82f6", border: "none", color: "#fff", padding: "10px 16px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>← Vrati na Novo</button>
-                    <button onClick={() => { updateStatus(currentReview.id, "known"); setReviewIndex(i => (i + 1) % reviewWords.length); setRevealed(false); }} style={{ background: "#22c55e", border: "none", color: "#fff", padding: "10px 16px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>Znam ✓</button>
+                  <div className="vocab-practice-footer" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", borderTop: "1px solid var(--v-border)", paddingTop: 17, marginTop: 24 }}>
+                    <button onClick={() => speak(currentReview.word)} style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", borderRadius: 10, color: "var(--v-accentSoft)", padding: "9px 13px", cursor: "pointer" }}>🔊 Izgovor</button>
+                    <button onClick={practiceAdvance} style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", borderRadius: 10, color: "var(--v-muted)", padding: "9px 13px", cursor: "pointer" }}>⏭ Preskoči</button>
+                    <button onClick={() => { setPracticeShuffle(v => !v); setReviewIndex(0); setRevealed(false); }} style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", borderRadius: 10, color: "var(--v-muted)", padding: "9px 13px", cursor: "pointer" }}>⇄ {practiceShuffle ? "Redom" : "Nasumično"}</button>
                   </div>
                 </div>
               )}
-              <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
-                {reviewWords.map((_, i) => (<div key={i} onClick={() => { setReviewIndex(i); setRevealed(false); }} style={{ width: 8, height: 8, borderRadius: "50%", background: i === reviewIndex ? "#f59e0b" : "var(--v-border)", cursor: "pointer", transition: "background 0.2s" }} />))}
+              <p style={{ color: "var(--v-muted)", fontSize: 11, textAlign: "center", margin: "15px 8px", lineHeight: 1.6 }}>„Ne znam“ i „Teško“ ostaju u kategoriji „Učim“, a „Znam“ ažurira status u Supabase-u. SRS raspored nije još aktivan.</p>
+            </section>
+            <aside className="vocab-practice-queue" style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 18, padding: 18, boxShadow: "0 8px 22px rgba(20,65,120,.035)" }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 17 }}>
+                <div style={{ width: 44, height: 44, background: "var(--v-elevated)", borderRadius: 13, color: "var(--v-accent)", display: "grid", placeItems: "center", fontSize: 24 }}>▱</div>
+                <div><h3 style={{ margin: "0 0 3px", fontSize: 22 }}>Na redu</h3><div style={{ color: "var(--v-muted)", fontSize: 12 }}>Sledeće reči za vežbanje</div></div>
               </div>
-            </div>
-          )}
-        </div>
+              {reviewWords.length < 2 ? <p style={{ color: "var(--v-muted)", fontSize: 13 }}>Nema drugih reči na čekanju.</p> : Array.from({ length: Math.min(5, reviewWords.length - 1) }, (_, i) => {
+                const idx = (reviewIndex + i + 1) % reviewWords.length;
+                const w = reviewWords[idx];
+                return <button key={w.id} onClick={() => { setReviewIndex(idx); setRevealed(false); }} style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", width: "100%", display: "flex", gap: 10, alignItems: "center", textAlign: "left", color: "var(--v-text)", borderRadius: 11, padding: "13px 10px", cursor: "pointer", marginBottom: 8 }}>
+                  <span style={{ display: "grid", placeItems: "center", background: "var(--v-elevated)", width: 30, height: 30, flexShrink: 0, borderRadius: "50%", fontFamily: "monospace", fontSize: 13 }}>{idx + 1}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}><span style={{ display: "block", fontSize: 17, fontWeight: 700, fontStyle: "italic", overflowWrap: "anywhere" }}>{w.word}</span>{w.ipa && <span style={{ color: "var(--v-muted)", fontSize: 11, display: "block", marginTop: 3 }}>{w.ipa}</span>}</span>
+                  <span style={{ background: "var(--v-learningBg)", color: "#e11d48", padding: "5px 9px", borderRadius: 30, fontSize: 11 }}>Učim</span>
+                </button>;
+              })}
+            </aside>
+          </div>
+        </main>
       )}
 
       {/* LIST VIEW */}
@@ -842,7 +903,7 @@ export default function VocabTracker() {
                 <div style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 17, padding: 22 }}>
                   <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: "var(--v-accentSoft)", marginBottom: 12 }}>Vežbanje</div>
                   <h3 style={{ margin: "0 0 8px", fontSize: 21 }}>Ponovi naučeno</h3>
-                  <p style={{ fontSize: 13, color: "var(--v-muted)", lineHeight: 1.5, margin: "0 0 20px" }}>Imaš {reviewWords.length} {reviewWords.length === 1 ? "reč" : "reči"} u kategoriji „Učim“. Ponovi ih pomoću postojećih kartica.</p>
+                  <p style={{ fontSize: 13, color: "var(--v-muted)", lineHeight: 1.5, margin: "0 0 20px" }}>Imaš {reviewWords.length} {reviewWords.length === 1 ? "reč" : "reči"} u kategoriji „Učim“. Pokreni novi prikaz vežbanja sa otkrivanjem prevoda i ocenjivanjem znanja.</p>
                   <button disabled={!reviewWords.length} onClick={() => { setView("review"); setReviewIndex(0); setRevealed(false); }}
                     style={{ background: "var(--v-accent)", color: "var(--v-accentText)", border: "none", padding: "12px 18px", borderRadius: 10, cursor: reviewWords.length ? "pointer" : "default", opacity: reviewWords.length ? 1 : 0.5, fontWeight: 700, fontSize: 13 }}>▶ Započni ponavljanje</button>
                 </div>
@@ -855,12 +916,29 @@ export default function VocabTracker() {
               </div>
             </section>
           )}
+          {workspaceTab === "home" && (
+            <section style={{ marginTop: 28 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
+                <div><h2 style={{ fontSize: 23, margin: "0 0 5px" }}>Poslednje dodate reči</h2><div style={{ fontSize: 13, color: "var(--v-muted)" }}>Brzi pregled, bez prikazivanja celog rečnika</div></div>
+                <button onClick={() => setWorkspaceTab("dictionary")} style={{ border: "1px solid var(--v-border)", background: "var(--v-panel)", borderRadius: 9, color: "var(--v-text)", padding: "9px 13px", cursor: "pointer" }}>Sve reči →</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(235px,1fr))", gap: 10 }}>
+                {[...words].sort((a,b) => new Date(b.addedAt || 0) - new Date(a.addedAt || 0)).slice(0,6).map(w => (
+                  <button key={w.id} onClick={() => { setSelected(w); setView("detail"); fetchImage(w.word,w.imageUrl,w.id); }} style={{ background: "var(--v-panel)", color: "var(--v-text)", border: "1px solid var(--v-border)", borderLeft: `4px solid ${statusDot(w.status)}`, textAlign: "left", borderRadius: 12, padding: "14px 16px", cursor: "pointer" }}>
+                    <div style={{ fontSize: 17, fontStyle: "italic", fontWeight: 700, marginBottom: 5 }}>{w.word}</div>
+                    <div style={{ fontSize: 13, color: "var(--v-muted)" }}>{w.translation}</div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+          {workspaceTab === "dictionary" && (<>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
             <div>
               <h2 style={{ margin: 0, fontSize: 22 }}>Moj rečnik</h2>
               <div style={{ color: "var(--v-muted)", fontSize: 12, marginTop: 4 }}>{filteredWords.length} prikazanih od ukupno {words.length} reči</div>
             </div>
-            <button onClick={() => { setWorkspaceTab("dictionary"); setView("add"); setWordInput(""); setAiData(null); setNotes(""); }} style={{ background: "var(--v-accent)", color: "var(--v-accentText)", border: "none", padding: "11px 18px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>+ Dodaj reč</button>
+
           </div>
           {/* Actions bar */}
           <div className="vocab-toolbar" style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 18, flexWrap: "wrap", background: "var(--v-panel)", padding: 10, border: "1px solid var(--v-border)", borderRadius: 14 }}>
@@ -983,16 +1061,17 @@ export default function VocabTracker() {
               </div>
             )
           )}
+          </>)}
         </div>
       )}
 
-      {view === "list" && combineMode && (
+      {view === "list" && workspaceTab === "dictionary" && combineMode && (
         <button onClick={generateCombined} disabled={selectedIds.length < 2 || combineLoading} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: selectedIds.length >= 2 ? "var(--v-accent)" : "var(--v-border)", border: "none", color: selectedIds.length >= 2 ? "#fff" : "var(--v-muted)", padding: "14px 36px", borderRadius: 50, cursor: selectedIds.length >= 2 ? "pointer" : "default", fontSize: 15, fontFamily: "monospace", letterSpacing: 1, boxShadow: selectedIds.length >= 2 ? "0 4px 24px rgba(99,102,241,0.5)" : "none", zIndex: 100, whiteSpace: "nowrap", transition: "all 0.2s" }}>
           {combineLoading ? "⟳ Generišem..." : selectedIds.length < 2 ? `Označi min. 2 reči (${selectedIds.length})` : `⊕ Generiši primere (${selectedIds.length})`}
         </button>
       )}
 
-      <style>{`* { outline: none; } input, textarea { transition: border-color 0.2s; } input:focus, textarea:focus { border-color: var(--v-accent) !important; } input::placeholder, textarea::placeholder { color: var(--v-subtle); } select { color-scheme: inherit; } button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--v-accent) !important; outline-offset: 2px; } button { transition: filter .16s ease, background .16s ease; } button:hover { filter: brightness(1.04); } @media(max-width: 720px) { .vocab-stat-grid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; } .vocab-hero-grid { grid-template-columns: 1fr !important; } .vocab-toolbar > input { flex-basis: 100% !important; } }`}</style>
+      <style>{`* { outline: none; } input, textarea { transition: border-color 0.2s; } input:focus, textarea:focus { border-color: var(--v-accent) !important; } input::placeholder, textarea::placeholder { color: var(--v-subtle); } select { color-scheme: inherit; } button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--v-accent) !important; outline-offset: 2px; } button { transition: filter .16s ease, background .16s ease; } button:hover { filter: brightness(1.04); } @media(max-width: 1050px) { .vocab-practice-grid { grid-template-columns: 1fr !important; } .vocab-practice-grid > aside:first-child { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; } .vocab-practice-grid > aside:first-child > .vocab-practice-stat { margin-bottom: 0 !important; } .vocab-practice-grid > aside:first-child > div:last-child { grid-column: 1 / -1; } } @media(max-width: 720px) { .vocab-practice-grid > aside:first-child { grid-template-columns: 1fr; } .vocab-practice-footer { justify-content: center !important; } .vocab-stat-grid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; } .vocab-hero-grid { grid-template-columns: 1fr !important; } .vocab-toolbar > input { flex-basis: 100% !important; } }`}</style>
     </div>
   );
 }
