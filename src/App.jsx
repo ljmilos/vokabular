@@ -34,6 +34,35 @@ const supabaseAuth = {
   }
 };
 
+const smartDb = {
+  async load(token) {
+    const headers = { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` };
+    const [scheduleResponse, historyResponse] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/vocab_srs_schedule?select=word_id,due_at,interval_days,streak,repetitions,last_rating&limit=10000`, { headers }),
+      fetch(`${SUPABASE_URL}/rest/v1/vocab_review_history?select=word_id,rating,reviewed_at&order=reviewed_at.desc&limit=10000`, { headers })
+    ]);
+    if (!scheduleResponse.ok || !historyResponse.ok) {
+      throw new Error("Smart Learning tabela nije dostupna. Prvo pokreni SQL migraciju iz ZIP paketa.");
+    }
+    return { schedule: await scheduleResponse.json(), history: await historyResponse.json() };
+  },
+  async rate(token, wordId, rating, requestId) {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/record_vocab_review`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_word_id: String(wordId), p_rating: rating, p_request_id: requestId })
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(result?.message || "Nije uspelo čuvanje odgovora u Supabase-u.");
+    return result;
+  }
+};
+
+function getLocalDayStart() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
 const db = {
   async getAll(token) {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/vocabulary?order=added_at.desc`, {
@@ -145,6 +174,17 @@ export default function VocabTracker() {
   const [revealed, setRevealed] = useState(false);
   const [practiceShuffle, setPracticeShuffle] = useState(false);
   const [practiceAnswers, setPracticeAnswers] = useState({});
+  const [practiceMode, setPracticeMode] = useState("smart"); // smart | free
+  const [srsSchedules, setSrsSchedules] = useState({});
+  const [srsHistory, setSrsHistory] = useState([]);
+  const [srsReady, setSrsReady] = useState(false);
+  const [srsError, setSrsError] = useState("");
+  const [srsSaving, setSrsSaving] = useState(false);
+  const [sessionReviewed, setSessionReviewed] = useState([]);
+  const [dayGoal, setDayGoal] = useState(() => {
+    const stored = Number(localStorage.getItem("vocab_daily_goal"));
+    return [10, 15, 20, 30, 50].includes(stored) ? stored : 20;
+  });
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [themeId, setThemeId] = useState(() => {
@@ -218,6 +258,25 @@ export default function VocabTracker() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!user?.id || !token) {
+      setSrsSchedules({}); setSrsHistory([]); setSrsReady(false); setSrsError("");
+      return;
+    }
+    let cancelled = false;
+    setSrsReady(false);
+    setSrsError("");
+    smartDb.load(token).then(data => {
+      if (cancelled) return;
+      setSrsSchedules(Object.fromEntries(data.schedule.map(row => [String(row.word_id), row])));
+      setSrsHistory(data.history);
+      setSrsReady(true);
+    }).catch(error => {
+      if (!cancelled) { setSrsError(error.message); setSrsReady(false); }
+    });
+    return () => { cancelled = true; };
+  }, [user?.id, token]);
 
   const showToast = (msg, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 2500); };
 
@@ -298,10 +357,23 @@ export default function VocabTracker() {
   );
   const filteredWords = searchedWords.filter(w => filter === "all" || w.status === filter);
 
-  const reviewWords = words.filter(w => w.status === "learning").sort((a, b) =>
-    practiceShuffle ? String(a.id).localeCompare(String(b.id)) : (a.addedAt || "").localeCompare(b.addedAt || "")
-  );
-  const currentReview = reviewWords[reviewIndex];
+  const todayStart = getLocalDayStart();
+  const todaysReviews = srsHistory.filter(r => new Date(r.reviewed_at).getTime() >= todayStart);
+  const todayCorrect = todaysReviews.filter(r => r.rating === "good").length;
+  const dueWords = words.filter(w => {
+    const schedule = srsSchedules[String(w.id)];
+    return !schedule?.due_at || new Date(schedule.due_at).getTime() <= Date.now();
+  }).sort((a, b) => {
+    const dateA = srsSchedules[String(a.id)]?.due_at || "";
+    const dateB = srsSchedules[String(b.id)]?.due_at || "";
+    return dateA.localeCompare(dateB) || String(a.word).localeCompare(String(b.word), "en");
+  });
+  // Smart mode: one assessment per word per session. Free mode never writes SRS data.
+  const reviewWords = (practiceMode === "smart" ? dueWords.filter(w => !sessionReviewed.includes(String(w.id))) : [...words])
+    .sort((a, b) => practiceShuffle ? String(b.id).localeCompare(String(a.id)) :
+      practiceMode === "smart" ? 0 : (a.addedAt || "").localeCompare(b.addedAt || ""));
+  const currentReview = reviewWords[reviewIndex % Math.max(1, reviewWords.length)];
+  const smartRemaining = reviewWords.length;
   const statusLabel = s => ({ new: "Novo", learning: "Učim", known: "Znam" }[s] || s);
   const statusDot = s => ({ new: "#3b82f6", learning: "#f59e0b", known: "#22c55e" }[s] || "var(--v-muted)");
   const counts = { all: words.length, new: words.filter(w => w.status === "new").length, learning: words.filter(w => w.status === "learning").length, known: words.filter(w => w.status === "known").length };
@@ -507,23 +579,49 @@ export default function VocabTracker() {
     setAuthLoading(false);
   };
 
+  const startPractice = (mode) => {
+    if (mode === "smart" && !srsReady) {
+      showToast(srsError || "Prvo aktiviraj Smart Learning SQL migraciju.", "#e11d48");
+      return;
+    }
+    setPracticeMode(mode);
+    setSessionReviewed([]);
+    setReviewIndex(0);
+    setRevealed(false);
+    setView("review");
+  };
   const practiceAdvance = () => {
-    setReviewIndex(i => reviewWords.length ? (i + 1) % reviewWords.length : 0);
+    if (practiceMode === "smart" && currentReview) {
+      // Preskočena reč se sklanja samo iz ove sesije; ostaje dospela za kasnije.
+      setSessionReviewed(prev => [...prev, String(currentReview.id)]);
+      setReviewIndex(0);
+    } else {
+      setReviewIndex(i => reviewWords.length ? (i + 1) % reviewWords.length : 0);
+    }
     setRevealed(false);
   };
   const practiceRate = async (rating) => {
-    if (!currentReview) return;
-    const id = currentReview.id;
-    setPracticeAnswers(prev => ({ ...prev, [id]: rating }));
-    if (rating === "known") {
-      // Reč nestaje iz skupa "Učim", zato zadržavamo isti indeks za sledeću karticu.
-      setReviewIndex(i => reviewWords.length <= 1 ? 0 : (i >= reviewWords.length - 1 ? 0 : i));
-      setRevealed(false);
-      await updateStatus(id, "known");
-    } else {
-      // "Ne znam" i "Teško" zadržavaju postojeći status Učim.
+    if (!currentReview || srsSaving) return;
+    const id = String(currentReview.id);
+    if (practiceMode === "free") {
+      setPracticeAnswers(prev => ({ ...prev, [id]: rating }));
       practiceAdvance();
+      return;
     }
+    if (!srsReady) return;
+    setSrsSaving(true);
+    try {
+      const requestId = crypto.randomUUID();
+      const result = await smartDb.rate(token, id, rating === "known" ? "good" : rating, requestId);
+      setSrsSchedules(prev => ({ ...prev, [id]: result.schedule }));
+      setSrsHistory(prev => [{ word_id: id, rating: result.rating, reviewed_at: result.reviewed_at }, ...prev]);
+      setSessionReviewed(prev => [...prev, id]);
+      setReviewIndex(0);
+      setPracticeAnswers(prev => ({ ...prev, [id]: rating }));
+      setRevealed(false);
+    } catch (error) {
+      showToast(error.message || "Greška pri čuvanju odgovora.", "#e11d48");
+    } finally { setSrsSaving(false); }
   };
 
   if (loading) return <div style={{ minHeight: "100vh", background: "var(--v-bg)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--v-accent)", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
@@ -636,8 +734,8 @@ export default function VocabTracker() {
                 {label}
               </button>
             ))}
-            <button onClick={() => { setView("review"); setReviewIndex(0); setRevealed(false); }} disabled={reviewWords.length === 0}
-              style={{ border: "1px solid " + (view === "review" ? "var(--v-accent)" : "var(--v-border)"), background: view === "review" ? "var(--v-accent)" : "var(--v-panel)", color: view === "review" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: reviewWords.length ? 1 : 0.5 }}>
+            <button onClick={() => startPractice(srsReady ? "smart" : "free")} disabled={words.length === 0}
+              style={{ border: "1px solid " + (view === "review" ? "var(--v-accent)" : "var(--v-border)"), background: view === "review" ? "var(--v-accent)" : "var(--v-panel)", color: view === "review" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: words.length ? 1 : 0.5 }}>
               ◎  Vežbanje
             </button>
             <button onClick={() => { setWorkspaceTab("dictionary"); setView("add"); setWordInput(""); setAiData(null); setNotes(""); }}
@@ -792,89 +890,57 @@ export default function VocabTracker() {
         </div>
       )}
 
-      {/* PRACTICE VIEW - polished Arctic Blue reference layout, all themes supported */}
+      {/* PRACTICE — v5.1 screenshot-inspired responsive dashboard */}
       {view === "review" && (
-        <main className="vocab-practice-page" style={{ maxWidth: 1320, margin: "0 auto", padding: isMobile ? "22px 14px 48px" : "30px 28px 64px", boxSizing: "border-box" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 15, marginBottom: 24 }}>
-            <div style={{ width: 54, height: 54, display: "grid", placeItems: "center", background: "var(--v-elevated)", borderRadius: 17, color: "var(--v-accent)", fontSize: 28, flexShrink: 0 }}>♧</div>
-            <div style={{ flex: 1 }}>
-              <h2 style={{ fontSize: isMobile ? 25 : 30, margin: "0 0 4px", lineHeight: 1.15 }}>Vežbanje danas</h2>
-              <div style={{ color: "var(--v-muted)", fontSize: 15 }}>{reviewWords.length} reči za ponavljanje</div>
+        <main className="vocab-practice-page" style={{ maxWidth: 1530, margin: "0 auto", padding: "22px 18px 56px", boxSizing: "border-box" }}>
+          <div className="v51-modes">
+            <div className="v51-mode-buttons">
+              <button onClick={() => startPractice("smart")} disabled={!srsReady} className={`v51-mode ${practiceMode === "smart" ? "active" : ""}`} style={{ opacity: srsReady ? 1 : .5 }}>♧ &nbsp; Pametno ponavljanje ({srsReady ? dueWords.length : "—"})</button>
+              <button onClick={() => startPractice("free")} className={`v51-mode ${practiceMode === "free" ? "active" : ""}`}>⤨ &nbsp; Slobodno vežbanje ({words.length})</button>
             </div>
-            <button onClick={() => { setView("list"); setWorkspaceTab("dictionary"); }} style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "10px 14px", borderRadius: 10, cursor: "pointer" }}>← Rečnik</button>
+            <div className="v51-goal-controls">
+              <label htmlFor="v51-daily-goal">◎ &nbsp; Dnevni cilj:</label>
+              <select id="v51-daily-goal" value={dayGoal} onChange={e => { const n = Number(e.target.value); setDayGoal(n); localStorage.setItem("vocab_daily_goal", String(n)); }}>
+                {[10,15,20,30,50].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <div className="v51-top-progress"><span style={{ width: `${Math.min(100, todaysReviews.length / dayGoal * 100)}%` }} /></div>
+              <strong>{todaysReviews.length} / {dayGoal} ({Math.min(100, Math.round(todaysReviews.length / dayGoal * 100))}%)</strong>
+            </div>
           </div>
-          <div className="vocab-practice-grid" style={{ display: "grid", gridTemplateColumns: "minmax(210px, .87fr) minmax(0, 1.68fr) minmax(235px, 1fr)", gap: 22, alignItems: "start" }}>
-            <aside className="vocab-practice-stats" style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 18, padding: 18, boxShadow: "0 8px 22px rgba(20,65,120,.035)" }}>
+          {srsError && <div role="alert" style={{ border: "1px solid var(--v-dangerBorder)", background: "var(--v-dangerBg)", borderRadius: 12, padding: 14, marginBottom: 20 }}>Smart Learning još nije aktivan: {srsError}. Slobodno vežbanje je dostupno.</div>}
+          <div className="v51-practice-grid">
+            <aside className="v51-pane v51-left">
+              <div className="v51-pane-title"><span className="v51-icon">▦</span><span><b>Današnje vežbanje</b><small>Reči koje je vreme da ponoviš</small></span></div>
               {[
-                ["▦", "Spremno danas", reviewWords.length, "var(--v-accent)", "var(--v-newBg)"],
-                ["✓", "Naučeno ukupno", counts.known, "#20a879", "var(--v-knownBg)"],
-                ["▤", "Učim", counts.learning, "var(--v-accent)", "var(--v-selectedBg)"]
-              ].map(([symbol, label, value, color, bg]) => (
-                <div key={label} className="vocab-practice-stat" style={{ display: "flex", gap: 12, alignItems: "center", padding: "15px 12px", borderRadius: 13, border: "1px solid var(--v-border)", background: "var(--v-card)", marginBottom: 10 }}>
-                  <div style={{ width: 42, height: 42, background: bg, color, borderRadius: 12, display: "grid", placeItems: "center", fontSize: 23, flexShrink: 0 }}>{symbol}</div>
-                  <div><div style={{ fontSize: 13, color: "var(--v-text)", marginBottom: 4 }}>{label}</div><div style={{ color: "var(--v-text)", fontSize: 27, fontWeight: 700, lineHeight: 1 }}>{value}</div></div>
-                </div>
-              ))}
-              <div style={{ borderTop: "1px solid var(--v-border)", marginTop: 17, paddingTop: 18 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}><span style={{ fontSize: 17, fontWeight: 600 }}>Napredak</span><strong style={{ fontSize: 20 }}>{counts.all ? Math.round(counts.known / counts.all * 100) : 0}%</strong></div>
-                <div style={{ background: "var(--v-elevated)", height: 12, borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${counts.all ? counts.known / counts.all * 100 : 0}%`, minWidth: counts.known ? 7 : 0, background: "var(--v-accent)", borderRadius: 99 }}/></div>
+                ["↻", "Za ponavljanje danas", srsReady ? dueWords.length : "—", "blue"],
+                ["✓", "Odrađeno danas", srsReady ? todaysReviews.length : "—", "green"],
+                ["◎", "Dnevni cilj", dayGoal, "purple"]
+              ].map(([icon,label,value,color]) => <div className="v51-stat" key={label}><span className={`v51-stat-icon ${color}`}>{icon}</span><span><small>{label}</small><strong>{value}</strong></span></div>)}
+              <div className="v51-progress-section">
+                <div className="v51-progress-head"><b>Napredak danas</b><strong>{Math.min(100, Math.round(todaysReviews.length / dayGoal * 100))}%</strong></div>
+                <div className="v51-progress-bar"><span style={{ width: `${Math.min(100, todaysReviews.length / dayGoal * 100)}%` }} /></div>
               </div>
+              <div className="v51-next-date"><span className="v51-icon">▦</span><span><b>Sledeće ponavljanje</b><small>{(() => { const dates = Object.values(srsSchedules).map(s => s.due_at && new Date(s.due_at).getTime()).filter(n => Number.isFinite(n) && n > Date.now()).sort((a,b) => a-b); return !srsReady ? "Aktiviraj Smart Learning" : dates.length ? new Date(dates[0]).toLocaleDateString("sr-RS", {day:"numeric",month:"short"}) : "Nema zakazanih reči"; })()}</small></span></div>
             </aside>
-            <section style={{ minWidth: 0 }}>
+            <section className="v51-middle">
               {!currentReview ? (
-                <div style={{ background: "var(--v-panel)", padding: 40, borderRadius: 20, border: "1px solid var(--v-border)", textAlign: "center" }}>
-                  <div style={{ fontSize: 38, marginBottom: 12 }}>🎉</div><h3>Sve je obnovljeno!</h3><p style={{ color: "var(--v-muted)" }}>Nema više reči u kategoriji „Učim“.</p>
-                  <button onClick={() => { setWorkspaceTab("dictionary"); setView("list"); }} style={{ background: "var(--v-accent)", color: "var(--v-accentText)", border: "none", borderRadius: 10, padding: "12px 18px", cursor: "pointer" }}>Otvori rečnik</button>
-                </div>
+                <div className="v51-flashcard v51-finished"><div className="v51-finished-emoji">🎉</div><h2>Sesija završena!</h2><p>{practiceMode === "smart" ? "Sve trenutno dospele reči su obrađene ili preskočene u ovoj sesiji. Preskočene reči ostaju dospele." : "Nema reči u rečniku."}</p><button className="v51-primary" onClick={() => startPractice(practiceMode)}>Nova sesija</button><button className="v51-outline" onClick={() => {setWorkspaceTab("dictionary");setView("list");}}>Otvori rečnik</button></div>
               ) : (
-                <div className="vocab-practice-card" style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderLeft: "5px solid var(--v-accent)", borderRadius: 22, padding: isMobile ? "20px 18px" : "25px 27px", boxShadow: "0 10px 30px rgba(20,65,120,.07)" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ borderRadius: 40, background: "var(--v-elevated)", border: "1px solid var(--v-border)", padding: "6px 13px", color: "var(--v-accentSoft)", fontFamily: "monospace", fontSize: 13 }}>{reviewIndex + 1} / {reviewWords.length}</span>
-                    <span title="Reč u kategoriji Učim" style={{ borderRadius: "50%", color: "var(--v-accentSoft)", border: "1px solid var(--v-border)", width: 37, height: 37, display: "grid", placeItems: "center", fontSize: 22 }}>☆</span>
-                  </div>
-                  <div style={{ textAlign: "center", padding: "10px 0 17px" }}>
-                    <div style={{ fontSize: isMobile ? 34 : 46, fontStyle: "italic", fontWeight: 700, lineHeight: 1.25, overflowWrap: "anywhere", marginBottom: 7 }}>{currentReview.word}</div>
-                    {currentReview.ipa && <div style={{ color: "var(--v-muted)", fontFamily: "monospace", fontSize: 14 }}>{currentReview.ipa}</div>}
-                    {!revealed && <div style={{ fontSize: 17, color: "var(--v-muted)", marginTop: 25 }}>Kako se prevodi na srpski?</div>}
-                  </div>
-                  {!revealed ? (
-                    <div style={{ textAlign: "center", padding: "0 0 10px" }}><button onClick={() => setRevealed(true)} style={{ background: "var(--v-action)", color: "#fff", border: "none", borderRadius: 28, padding: "14px 35px", fontSize: 16, fontWeight: 700, cursor: "pointer", boxShadow: "0 5px 12px rgba(210,138,41,.2)", minWidth: 210 }}>Prikaži odgovor</button></div>
-                  ) : (
-                    <div style={{ padding: "4px 0 0" }}>
-                      <div style={{ background: "var(--v-knownBg)", color: "#138451", padding: "15px 14px", borderRadius: 12, textAlign: "center", fontSize: 24, fontWeight: 700, marginBottom: 16 }}>✓ {currentReview.wordSr || currentReview.translation || "Nema prevoda"}</div>
-                      <div className="vocab-practice-actions" style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 10 }}>
-                        <button onClick={() => practiceRate("again")} style={{ background: "var(--v-dangerBg)", color: "#e11d48", border: "1px solid #ec8da0", borderRadius: 11, padding: "13px 3px", fontWeight: 700, cursor: "pointer" }}>? Ne znam</button>
-                        <button onClick={() => practiceRate("hard")} style={{ background: "var(--v-card)", color: "var(--v-action)", border: "1px solid var(--v-action)", borderRadius: 11, padding: "13px 3px", fontWeight: 700, cursor: "pointer" }}>◔ Teško</button>
-                        <button onClick={() => practiceRate("known")} style={{ background: "var(--v-knownBg)", color: "#138451", border: "1px solid #4bbc8b", borderRadius: 11, padding: "13px 3px", fontWeight: 700, cursor: "pointer" }}>✓ Znam</button>
-                      </div>
-                      {currentReview.sentences?.[0] && <details style={{ background: "var(--v-card)", borderRadius: 10, padding: "10px 12px", marginTop: 14, color: "var(--v-muted)", fontSize: 13 }}><summary style={{ cursor: "pointer" }}>Primer upotrebe</summary><div style={{ marginTop: 10 }}>{currentReview.sentences[0].en || currentReview.sentences[0]}</div>{currentReview.sentences[0].sr && <div style={{ fontStyle: "italic", marginTop: 6 }}>↳ {currentReview.sentences[0].sr}</div>}</details>}
-                    </div>
-                  )}
-                  <div className="vocab-practice-footer" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", borderTop: "1px solid var(--v-border)", paddingTop: 17, marginTop: 24 }}>
-                    <button onClick={() => speak(currentReview.word)} style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", borderRadius: 10, color: "var(--v-accentSoft)", padding: "9px 13px", cursor: "pointer" }}>🔊 Izgovor</button>
-                    <button onClick={practiceAdvance} style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", borderRadius: 10, color: "var(--v-muted)", padding: "9px 13px", cursor: "pointer" }}>⏭ Preskoči</button>
-                    <button onClick={() => { setPracticeShuffle(v => !v); setReviewIndex(0); setRevealed(false); }} style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", borderRadius: 10, color: "var(--v-muted)", padding: "9px 13px", cursor: "pointer" }}>⇄ {practiceShuffle ? "Redom" : "Nasumično"}</button>
-                  </div>
+                <div className="v51-flashcard">
+                  <div className="v51-card-top"><span className="v51-counter">{practiceMode === "smart" ? sessionReviewed.length + 1 : reviewIndex + 1} / {practiceMode === "smart" ? sessionReviewed.length + reviewWords.length : reviewWords.length}</span><span className="v51-card-mode">{practiceMode === "smart" ? "Pametno ponavljanje" : "Slobodno vežbanje"}</span><span title={`Status: ${statusLabel(currentReview.status)}`} className="v51-star">☆</span></div>
+                  <div className="v51-word"><div className="v51-word-line"><h2>{currentReview.word}</h2><button onClick={() => speak(currentReview.word)} className="v51-sound" aria-label="Izgovori reč" title="Izgovori reč">◖))</button></div>{currentReview.ipa && <div className="v51-ipa">{currentReview.ipa}</div>}</div>
+                  {!revealed ? <div className="v51-question"><p>Kako se prevodi na srpski?</p><button className="v51-reveal" onClick={() => setRevealed(true)}>Prikaži odgovor</button></div> : <div className="v51-revealed"><div className="v51-answer">✓ &nbsp; {currentReview.wordSr || currentReview.translation || "Nema prevoda"}</div>{currentReview.sentences?.[0] && <div className="v51-example"><span>❞</span><div><strong>Primer:</strong><div className="v51-example-en">{currentReview.sentences[0].en || currentReview.sentences[0]}</div>{currentReview.sentences[0].sr && <small>{currentReview.sentences[0].sr}</small>}</div></div>}<div className="v51-rating-grid"><button onClick={() => practiceRate("again")} disabled={srsSaving} className="v51-rating bad"><b>✕ &nbsp; Ne znam</b><small>{practiceMode === "smart" ? "Ponovo za 10 min" : "Sledeća reč"}</small></button><button onClick={() => practiceRate("hard")} disabled={srsSaving} className="v51-rating hard"><b>▥ &nbsp; Teško</b><small>{practiceMode === "smart" ? "Ponovo za 1 dan" : "Sledeća reč"}</small></button><button onClick={() => practiceRate("known")} disabled={srsSaving} className="v51-rating good"><b>✓ &nbsp; Znam</b><small>{practiceMode === "smart" ? "Duži interval" : "Sledeća reč"}</small></button></div></div>}
+                  <div className="v51-card-bottom"><button onClick={() => speak(currentReview.word)}>◖)) &nbsp; Izgovor</button><button onClick={practiceAdvance}>⏭ &nbsp; Preskoči</button><button onClick={() => { setPracticeShuffle(v => !v);setReviewIndex(0);setRevealed(false); }}>⤨ &nbsp; {practiceShuffle ? "Redom" : "Nasumično"}</button></div>
                 </div>
               )}
-              <p style={{ color: "var(--v-muted)", fontSize: 11, textAlign: "center", margin: "15px 8px", lineHeight: 1.6 }}>„Ne znam“ i „Teško“ ostaju u kategoriji „Učim“, a „Znam“ ažurira status u Supabase-u. SRS raspored nije još aktivan.</p>
+              <div className="v51-below-card"><button onClick={() => { setReviewIndex(i => reviewWords.length ? (i - 1 + reviewWords.length) % reviewWords.length : 0); setRevealed(false); }} disabled={practiceMode === "smart" || reviewWords.length < 2}>← &nbsp; Prethodna</button><div className="v51-dots">{Array.from({length:Math.min(11,Math.max(1,reviewWords.length))},(_,i)=><i key={i} className={i === (reviewIndex % Math.max(1,reviewWords.length)) ? "on" : ""} />)}</div><button onClick={practiceAdvance} disabled={!currentReview}>Sledeća &nbsp; →</button></div>
             </section>
-            <aside className="vocab-practice-queue" style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 18, padding: 18, boxShadow: "0 8px 22px rgba(20,65,120,.035)" }}>
-              <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 17 }}>
-                <div style={{ width: 44, height: 44, background: "var(--v-elevated)", borderRadius: 13, color: "var(--v-accent)", display: "grid", placeItems: "center", fontSize: 24 }}>▱</div>
-                <div><h3 style={{ margin: "0 0 3px", fontSize: 22 }}>Na redu</h3><div style={{ color: "var(--v-muted)", fontSize: 12 }}>Sledeće reči za vežbanje</div></div>
-              </div>
-              {reviewWords.length < 2 ? <p style={{ color: "var(--v-muted)", fontSize: 13 }}>Nema drugih reči na čekanju.</p> : Array.from({ length: Math.min(5, reviewWords.length - 1) }, (_, i) => {
-                const idx = (reviewIndex + i + 1) % reviewWords.length;
-                const w = reviewWords[idx];
-                return <button key={w.id} onClick={() => { setReviewIndex(idx); setRevealed(false); }} style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", width: "100%", display: "flex", gap: 10, alignItems: "center", textAlign: "left", color: "var(--v-text)", borderRadius: 11, padding: "13px 10px", cursor: "pointer", marginBottom: 8 }}>
-                  <span style={{ display: "grid", placeItems: "center", background: "var(--v-elevated)", width: 30, height: 30, flexShrink: 0, borderRadius: "50%", fontFamily: "monospace", fontSize: 13 }}>{idx + 1}</span>
-                  <span style={{ flex: 1, minWidth: 0 }}><span style={{ display: "block", fontSize: 17, fontWeight: 700, fontStyle: "italic", overflowWrap: "anywhere" }}>{w.word}</span>{w.ipa && <span style={{ color: "var(--v-muted)", fontSize: 11, display: "block", marginTop: 3 }}>{w.ipa}</span>}</span>
-                  <span style={{ background: "var(--v-learningBg)", color: "#e11d48", padding: "5px 9px", borderRadius: 30, fontSize: 11 }}>Učim</span>
-                </button>;
-              })}
+            <aside className="v51-pane v51-right">
+              <div className="v51-pane-title"><span className="v51-icon">▱</span><span><b>Sledeće na redu</b><small>Narednih 5 reči za vežbanje</small></span></div>
+              {reviewWords.length < 2 ? <p className="v51-empty">Trenutno nema narednih reči.</p> : Array.from({length:Math.min(5,reviewWords.length-1)},(_,i)=>{const idx=(reviewIndex+i+1)%reviewWords.length;const w=reviewWords[idx];return <button className="v51-queue-row" key={w.id} onClick={()=>{setReviewIndex(idx);setRevealed(false);}}><span className="v51-queue-num">{i+1}</span><span className="v51-queue-label"><b>{w.word}</b><small>{w.ipa || " "}</small></span><span className={`v51-status ${w.status}`}>{statusLabel(w.status)}</span></button>;})}
             </aside>
           </div>
+          <div className="v51-explanation"><div><span className="v51-icon">♧</span><span><b>Smart Learning (SRS)</b><small>{practiceMode === "smart" ? "Aplikacija određuje naredno ponavljanje na osnovu tvojih odgovora." : "Slobodno vežbanje ne menja raspored, statuse ni istoriju u Supabase-u."}</small></span></div><div><b>Raspored ponavljanja:</b><span><em>✕ Ne znam – 10 min</em><em>◔ Teško – 1 dan</em><em>✓ Znam – sve duži intervali</em></span></div></div>
         </main>
       )}
 
@@ -903,15 +969,15 @@ export default function VocabTracker() {
                 <div style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 17, padding: 22 }}>
                   <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: "var(--v-accentSoft)", marginBottom: 12 }}>Vežbanje</div>
                   <h3 style={{ margin: "0 0 8px", fontSize: 21 }}>Ponovi naučeno</h3>
-                  <p style={{ fontSize: 13, color: "var(--v-muted)", lineHeight: 1.5, margin: "0 0 20px" }}>Imaš {reviewWords.length} {reviewWords.length === 1 ? "reč" : "reči"} u kategoriji „Učim“. Pokreni novi prikaz vežbanja sa otkrivanjem prevoda i ocenjivanjem znanja.</p>
-                  <button disabled={!reviewWords.length} onClick={() => { setView("review"); setReviewIndex(0); setRevealed(false); }}
-                    style={{ background: "var(--v-accent)", color: "var(--v-accentText)", border: "none", padding: "12px 18px", borderRadius: 10, cursor: reviewWords.length ? "pointer" : "default", opacity: reviewWords.length ? 1 : 0.5, fontWeight: 700, fontSize: 13 }}>▶ Započni ponavljanje</button>
+                  <p style={{ fontSize: 13, color: "var(--v-muted)", lineHeight: 1.5, margin: "0 0 20px" }}>{srsReady ? `Danas je dospelo ${dueWords.length} reči. Već imaš ${todaysReviews.length} ponavljanja, od cilja ${dayGoal}.` : "Aktiviraj Smart Learning SQL skriptom ili nastavi sa slobodnim vežbanjem."}</p>
+                  <button disabled={!words.length} onClick={() => startPractice(srsReady ? "smart" : "free")}
+                    style={{ background: "var(--v-accent)", color: "var(--v-accentText)", border: "none", padding: "12px 18px", borderRadius: 10, cursor: words.length ? "pointer" : "default", opacity: words.length ? 1 : 0.5, fontWeight: 700, fontSize: 13 }}>▶ {srsReady ? "Pametno ponavljanje" : "Slobodno vežbanje"}</button>
                 </div>
                 <div style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 17, padding: 22 }}>
                   <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: "var(--v-accentSoft)", marginBottom: 12 }}>Napredak rečnika</div>
                   <div style={{ fontSize: 32, fontWeight: 700, marginBottom: 10 }}>{counts.all ? Math.round(counts.known / counts.all * 100) : 0}% <span style={{ fontWeight: 400, fontSize: 13, color: "var(--v-muted)" }}>u statusu Znam</span></div>
                   <div style={{ height: 9, background: "var(--v-elevated)", overflow: "hidden", borderRadius: 20, marginBottom: 12 }}><div style={{ width: `${counts.all ? counts.known / counts.all * 100 : 0}%`, height: "100%", background: "#22a36a", borderRadius: 20 }} /></div>
-                  <div style={{ color: "var(--v-muted)", fontSize: 12, lineHeight: 1.6 }}>Ovaj procenat je zasnovan na ručno dodeljenim statusima reči.</div>
+                  <div style={{ color: "var(--v-muted)", fontSize: 12, lineHeight: 1.6 }}>Statusi reči ostaju ručni. {srsReady ? `Danas: ${todaysReviews.length} ocena · ${todayCorrect} puta „Znam“. Sledeći termin svake reči čuva se u Supabase-u.` : "Za istoriju i raspored uradi SQL migraciju."}</div>
                 </div>
               </div>
             </section>
@@ -1071,6 +1137,58 @@ export default function VocabTracker() {
         </button>
       )}
 
+      <style>{`.vocab-practice-page { font-family: Georgia, serif; }
+.v51-modes {display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:30px}
+.v51-mode-buttons {display:flex;flex-wrap:wrap;gap:10px}
+.v51-mode {border:1px solid var(--v-border);background:var(--v-panel);color:var(--v-text);border-radius:24px;padding:14px 22px;font-size:16px;font-weight:650;cursor:pointer}
+.v51-mode.active,.v51-primary {background:var(--v-accent);color:var(--v-accentText);border-color:var(--v-accent)}
+.v51-goal-controls {display:flex;gap:9px;align-items:center;font-size:14px;font-family:Arial,sans-serif;color:var(--v-text)}
+.v51-goal-controls label {border:1px solid var(--v-border);border-right:0;background:var(--v-panel);padding:12px 2px 12px 15px;border-radius:12px 0 0 12px;white-space:nowrap}
+.v51-goal-controls select {border:1px solid var(--v-border);border-left:0;border-radius:0 12px 12px 0;background:var(--v-panel);color:var(--v-text);padding:12px 9px;margin-left:-9px;font-weight:700}
+.v51-goal-controls strong{white-space:nowrap}
+.v51-top-progress,.v51-progress-bar{height:14px;background:var(--v-elevated);border-radius:20px;overflow:hidden}
+.v51-top-progress{width:140px}
+.v51-top-progress span,.v51-progress-bar span{display:block;height:100%;border-radius:20px;background:linear-gradient(90deg,#10a763,#28c87a);transition:width .3s}
+.v51-practice-grid{display:grid;grid-template-columns:minmax(245px,.95fr) minmax(380px,1.72fr) minmax(270px,.99fr);gap:20px;align-items:start}
+.v51-pane,.v51-flashcard,.v51-explanation{background:var(--v-panel);border:1px solid var(--v-border);border-radius:20px;box-shadow:0 9px 26px rgba(31,78,137,.055)}
+.v51-pane{padding:22px}
+.v51-pane-title{display:flex;align-items:center;gap:14px;margin-bottom:23px}
+.v51-pane-title b{display:block;font-size:22px;line-height:1.14;color:var(--v-text)}
+.v51-pane-title small{display:block;font-size:13px;color:var(--v-muted);margin-top:5px}
+.v51-icon{width:48px;height:48px;flex-shrink:0;display:grid;place-items:center;border-radius:14px;background:var(--v-elevated);color:var(--v-accent);font-size:26px}
+.v51-stat{display:flex;align-items:center;gap:14px;border:1px solid var(--v-border);border-radius:14px;background:var(--v-card);padding:13px 14px;margin-bottom:10px}
+.v51-stat small,.v51-stat strong{display:block}
+.v51-stat small{font-size:15px;color:var(--v-muted);margin-bottom:5px}
+.v51-stat strong{font-size:30px;line-height:1.1;color:var(--v-text)}
+.v51-stat-icon{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;font-size:27px;flex-shrink:0}
+.v51-stat-icon.blue {color:#197ce8;background:#e9f3ff}.v51-stat-icon.green{color:#13a46a;background:#e5f7ec}.v51-stat-icon.purple{color:#7055df;background:#f0edff}
+.v51-progress-section{margin:28px 0 25px}
+.v51-progress-head{display:flex;justify-content:space-between;align-items:center;font-size:17px;margin-bottom:14px}
+.v51-progress-bar{height:17px}
+.v51-next-date{display:flex;gap:13px;align-items:center;background:var(--v-elevated);border-radius:14px;padding:14px 12px}
+.v51-next-date b,.v51-next-date small{display:block}.v51-next-date b{font-size:15px}.v51-next-date small{font-size:13px;color:var(--v-muted);margin-top:5px}
+.v51-middle{min-width:0}
+.v51-flashcard{border:2px solid var(--v-accent);padding:22px 25px 24px;min-height:410px;display:flex;flex-direction:column}
+.v51-card-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.v51-counter,.v51-card-mode{background:var(--v-elevated);color:var(--v-accentSoft);border-radius:30px;padding:9px 17px;font:700 14px Arial,sans-serif}
+.v51-card-mode{font-size:13px}.v51-star{font-size:29px;width:42px;height:42px;border:1px solid var(--v-border);border-radius:50%;text-align:center;line-height:38px;color:var(--v-muted)}
+.v51-word{text-align:center;margin:22px 0 16px}.v51-word-line{display:flex;align-items:center;justify-content:center;gap:18px}.v51-word h2{font-size:clamp(35px,4vw,58px);font-weight:700;font-style:italic;line-height:1.16;margin:0;overflow-wrap:anywhere}.v51-ipa{font:16px monospace;color:var(--v-muted);margin-top:10px}
+.v51-sound{border:none;border-radius:50%;background:var(--v-elevated);color:var(--v-accent);font-size:19px;width:53px;height:53px;cursor:pointer;flex-shrink:0}
+.v51-question{text-align:center;margin:15px 0 25px}.v51-question p{font-size:18px;color:var(--v-muted);margin:8px 0 24px}
+.v51-reveal{border:0;border-radius:26px;padding:14px 35px;background:linear-gradient(110deg,#ffad19,#de7900);color:#fff;font-size:17px;font-weight:700;box-shadow:0 6px 17px rgba(212,126,14,.2);cursor:pointer}
+.v51-revealed{display:flex;flex-direction:column;gap:14px;margin:8px 0 16px}
+.v51-answer{background:linear-gradient(100deg,#dff7e9,#cdf4df);color:#075b39;font-size:28px;font-weight:bold;text-align:center;border-radius:13px;padding:16px 12px;overflow-wrap:anywhere}
+.v51-example{display:flex;gap:17px;padding:15px 6px;color:var(--v-text)}.v51-example>span{color:var(--v-accent);font-size:34px;font-weight:bold;line-height:1}.v51-example strong{color:var(--v-accent);font:700 14px Arial,sans-serif}.v51-example-en{font-size:17px;font-weight:700;font-style:italic;margin:5px 0}.v51-example small{color:var(--v-muted);font-size:14px}
+.v51-rating-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.v51-rating{display:flex;flex-direction:column;gap:6px;align-items:center;border-radius:13px;padding:13px 4px;cursor:pointer;min-width:0}.v51-rating b{font-size:15px;white-space:nowrap}.v51-rating small{font-size:12px;color:var(--v-text)}.v51-rating.bad{background:#fff0f3;color:#d71937;border:1px solid #fb5672}.v51-rating.hard{background:#fff7e6;color:#d77700;border:1px solid #ffad19}.v51-rating.good{background:#e6f8ef;color:#087c48;border:1px solid #25b66b}
+.v51-card-bottom{display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;border-top:1px solid var(--v-border);margin-top:auto;padding-top:20px}.v51-card-bottom button,.v51-below-card button,.v51-outline{color:var(--v-accentSoft);background:var(--v-card);border:1px solid var(--v-border);border-radius:12px;padding:10px 16px;cursor:pointer;font-size:13px;font-weight:700}
+.v51-below-card{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px}.v51-below-card button{background:var(--v-panel);border-radius:25px}.v51-below-card button:disabled{opacity:.4;cursor:not-allowed}.v51-dots{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}.v51-dots i{display:block;background:var(--v-border);border-radius:100%;width:9px;height:9px}.v51-dots i.on{background:#13b36c}
+.v51-queue-row{display:flex;align-items:center;gap:12px;width:100%;background:var(--v-card);border:1px solid var(--v-border);border-radius:13px;padding:15px 12px;margin-top:6px;margin-bottom:8px;cursor:pointer;text-align:left;color:var(--v-text)}.v51-queue-num{display:grid;place-items:center;background:var(--v-elevated);height:37px;width:37px;flex-shrink:0;border-radius:50%;font:700 15px Arial,sans-serif}.v51-queue-label{flex:1;min-width:0}.v51-queue-label b{display:block;font-size:21px;font-style:italic;overflow-wrap:anywhere}.v51-queue-label small{font:13px monospace;color:var(--v-muted);display:block;margin-top:4px}.v51-status{font:700 12px Arial,sans-serif;border-radius:22px;padding:8px 10px;white-space:nowrap}.v51-status.learning{background:#fae4e9;color:#be173e}.v51-status.known{background:#e1f0ff;color:#1771be}.v51-status.new{background:#eee6ff;color:#6748ca}.v51-empty{font-size:13px;color:var(--v-muted)}
+.v51-explanation{margin-top:26px;padding:14px 20px;display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:center}.v51-explanation>div:first-child{display:flex;gap:14px;align-items:center}.v51-explanation b,.v51-explanation small{display:block}.v51-explanation b{font-size:15px}.v51-explanation small{font-size:12px;color:var(--v-muted);margin-top:5px}.v51-explanation>div:last-child{border-left:1px solid var(--v-border);padding-left:22px}.v51-explanation>div:last-child>span{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}.v51-explanation em{font:12px Arial,sans-serif;background:var(--v-elevated);color:var(--v-muted);border-radius:20px;padding:7px 10px;font-style:normal}
+.v51-finished{text-align:center;align-items:center;justify-content:center;gap:12px}.v51-finished-emoji{font-size:45px}.v51-finished h2{margin:0}.v51-finished p{color:var(--v-muted);max-width:450px;line-height:1.6}.v51-primary{border:0;border-radius:10px;padding:12px 25px;cursor:pointer;font-weight:700}
+@media(max-width:1150px){.v51-practice-grid{grid-template-columns:minmax(215px,.9fr) minmax(330px,1.5fr)}.v51-right{grid-column:1/-1}.v51-queue-row{display:inline-flex;width:calc(50% - 8px);vertical-align:top;margin-right:8px}.v51-goal-controls{margin-left:0}}
+@media(max-width:780px){.v51-practice-grid{grid-template-columns:1fr}.v51-right{grid-column:auto}.v51-mode{padding:12px 14px;font-size:14px}.v51-queue-row{display:flex;width:100%;margin-right:0}.v51-explanation{grid-template-columns:1fr}.v51-explanation>div:last-child{border:0;border-top:1px solid var(--v-border);padding:15px 0 0}.v51-left{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.v51-left .v51-pane-title,.v51-left .v51-progress-section,.v51-left .v51-next-date{grid-column:1/-1}.v51-stat{padding:8px;gap:6px}.v51-stat-icon{height:32px;width:32px;font-size:17px}.v51-stat small{font-size:11px}.v51-stat strong{font-size:22px}}
+@media(max-width:520px){.v51-left{grid-template-columns:1fr}.v51-modes{gap:14px}.v51-goal-controls{flex-wrap:wrap}.v51-top-progress{width:85px}.v51-flashcard{padding:17px 13px}.v51-card-mode{display:none}.v51-rating-grid{gap:5px}.v51-rating b{font-size:12px}.v51-rating small{font-size:10px}.v51-card-bottom button{padding:9px 8px;font-size:11px}.v51-dots{display:none}.v51-pane{padding:16px}}
+`}</style>
       <style>{`* { outline: none; } input, textarea { transition: border-color 0.2s; } input:focus, textarea:focus { border-color: var(--v-accent) !important; } input::placeholder, textarea::placeholder { color: var(--v-subtle); } select { color-scheme: inherit; } button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--v-accent) !important; outline-offset: 2px; } button { transition: filter .16s ease, background .16s ease; } button:hover { filter: brightness(1.04); } @media(max-width: 1050px) { .vocab-practice-grid { grid-template-columns: 1fr !important; } .vocab-practice-grid > aside:first-child { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; } .vocab-practice-grid > aside:first-child > .vocab-practice-stat { margin-bottom: 0 !important; } .vocab-practice-grid > aside:first-child > div:last-child { grid-column: 1 / -1; } } @media(max-width: 720px) { .vocab-practice-grid > aside:first-child { grid-template-columns: 1fr; } .vocab-practice-footer { justify-content: center !important; } .vocab-stat-grid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; } .vocab-hero-grid { grid-template-columns: 1fr !important; } .vocab-toolbar > input { flex-basis: 100% !important; } }`}</style>
     </div>
   );
