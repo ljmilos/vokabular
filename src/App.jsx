@@ -150,6 +150,71 @@ const VOCAB_THEMES = {
 };
 const VOCAB_THEME_IDS = Object.keys(VOCAB_THEMES);
 
+
+// v6 knowledge tests use only the already loaded user's words.
+// They do not update vocabulary statuses or the v5 spaced repetition schedule.
+function normalizeTestAnswer(value) {
+  return String(value || "").normalize("NFC").toLocaleLowerCase("sr-RS")
+    .replace(/[.!?„“"'’]/g, "").replace(/\s+/g, " ").trim();
+}
+function acceptedTestAnswers(value) {
+  const source = String(value || "");
+  const variants = [source, ...source.split(/\s*[/;,]\s*/).filter(Boolean)];
+  return [...new Set(variants.map(normalizeTestAnswer).filter(Boolean))];
+}
+function randomizeTestItems(items) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+function findClozeSentence(word) {
+  const target = String(word.word || "").trim();
+  if (!target) return null;
+  const escape = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(^|[^\\p{L}])(${escape})(?=$|[^\\p{L}])`, "iu");
+  for (const sentence of (word.sentences || [])) {
+    const en = typeof sentence === "string" ? sentence : sentence?.en;
+    if (typeof en === "string" && regex.test(en)) {
+      return { masked: en.replace(regex, (_match, prefix) => `${prefix}_____`), full: en, sr: sentence?.sr || "" };
+    }
+  }
+  return null;
+}
+function buildKnowledgeQuestions(words, mode, maxCount = 20) {
+  const valid = words.filter(w => String(w.word || "").trim() && String(w.wordSr || w.translation || "").trim());
+  const distinctTranslations = [...new Set(valid.map(w => normalizeTestAnswer(w.wordSr || w.translation)))];
+  const pool = randomizeTestItems(valid).slice(0, maxCount);
+  const all = [];
+  for (let i = 0; i < pool.length; i++) {
+    const word = pool[i];
+    const cloze = findClozeSentence(word);
+    const types = mode === "mixed"
+      ? randomizeTestItems(["typing", "reverse", ...(distinctTranslations.length >= 4 ? ["choice"] : []), ...(cloze ? ["cloze"] : [])])
+      : [mode];
+    const type = types[0];
+    if (type === "cloze" && !cloze) continue;
+    if (type === "choice" && distinctTranslations.length < 4) continue;
+    let options = [];
+    if (type === "choice") {
+      const correct = word.wordSr || word.translation;
+      const incorrect = randomizeTestItems(valid.filter(w => normalizeTestAnswer(w.wordSr || w.translation) !== normalizeTestAnswer(correct)));
+      const unique = [];
+      for (const distractor of incorrect) {
+        const text = distractor.wordSr || distractor.translation;
+        if (!unique.some(x => normalizeTestAnswer(x) === normalizeTestAnswer(text))) unique.push(text);
+        if (unique.length === 3) break;
+      }
+      if (unique.length < 3) continue;
+      options = randomizeTestItems([correct, ...unique]);
+    }
+    all.push({ id: `${word.id}-${i}`, word, type, cloze, options });
+  }
+  return all;
+}
+
 export default function VocabTracker() {
   const [emailConfirmed, setEmailConfirmed] = useState(false);
   const [user, setUser] = useState(null);
@@ -175,6 +240,12 @@ export default function VocabTracker() {
   const [practiceShuffle, setPracticeShuffle] = useState(false);
   const [practiceAnswers, setPracticeAnswers] = useState({});
   const [practiceMode, setPracticeMode] = useState("smart"); // smart | free
+  const [testMode, setTestMode] = useState("typing");
+  const [testQuestions, setTestQuestions] = useState([]);
+  const [testIndex, setTestIndex] = useState(0);
+  const [testInput, setTestInput] = useState("");
+  const [testFeedback, setTestFeedback] = useState(null);
+  const [testResults, setTestResults] = useState([]);
   const [srsSchedules, setSrsSchedules] = useState({});
   const [srsHistory, setSrsHistory] = useState([]);
   const [srsReady, setSrsReady] = useState(false);
@@ -579,6 +650,33 @@ export default function VocabTracker() {
     setAuthLoading(false);
   };
 
+  const startKnowledgeTest = (mode = testMode) => {
+    const questions = buildKnowledgeQuestions(words, mode);
+    setTestMode(mode);
+    setTestQuestions(questions);
+    setTestIndex(0);
+    setTestInput("");
+    setTestFeedback(null);
+    setTestResults([]);
+    setView("test");
+  };
+  const submitKnowledgeAnswer = (answer = testInput) => {
+    const question = testQuestions[testIndex];
+    if (!question || testFeedback) return;
+    const expected = question.type === "reverse" || question.type === "cloze"
+      ? question.word.word : (question.word.wordSr || question.word.translation);
+    const correct = acceptedTestAnswers(expected).includes(normalizeTestAnswer(answer));
+    const result = { id: question.id, word: question.word.word, correct, type: question.type, expected, given: String(answer || "") };
+    setTestResults(prev => [...prev, result]);
+    setTestFeedback(result);
+  };
+  const nextKnowledgeQuestion = () => {
+    if (!testFeedback) return;
+    setTestIndex(i => i + 1);
+    setTestInput("");
+    setTestFeedback(null);
+  };
+
   const startPractice = (mode) => {
     if (mode === "smart" && !srsReady) {
       showToast(srsError || "Prvo aktiviraj Smart Learning SQL migraciju.", "#e11d48");
@@ -738,6 +836,10 @@ export default function VocabTracker() {
               style={{ border: "1px solid " + (view === "review" ? "var(--v-accent)" : "var(--v-border)"), background: view === "review" ? "var(--v-accent)" : "var(--v-panel)", color: view === "review" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: words.length ? 1 : 0.5 }}>
               ◎  Vežbanje
             </button>
+            <button onClick={() => startKnowledgeTest()} disabled={words.length === 0}
+              style={{ border: "1px solid " + (view === "test" ? "var(--v-accent)" : "var(--v-border)"), background: view === "test" ? "var(--v-accent)" : "var(--v-panel)", color: view === "test" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: words.length ? 1 : .5 }}>
+              ✎ &nbsp; Testovi
+            </button>
             <button onClick={() => { setWorkspaceTab("dictionary"); setView("add"); setWordInput(""); setAiData(null); setNotes(""); }}
               style={{ marginLeft: "auto", background: "var(--v-accent)", color: "var(--v-accentText)", border: "none", borderRadius: 10, padding: "10px 17px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
               + Dodaj reč
@@ -888,6 +990,38 @@ export default function VocabTracker() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* v6: local-only tests; never modify SRS or vocabulary */}
+      {view === "test" && (
+        <main className="v6-page">
+          <div className="v6-heading"><div><div className="v6-eyebrow">KNOWLEDGE TESTS · V6</div><h2>Proveri koliko znaš</h2><p>Pet načina vežbanja. Rezultati testa ne menjaju rečnik ni SRS raspored.</p></div><span className="v6-chip">{words.length} reči u rečniku</span></div>
+          <div className="v6-modes">
+            {[
+              ["typing", "✎ Engleski → srpski", "Ukucaj prevod"],
+              ["reverse", "⇄ Srpski → engleski", "Seti se engleske reči"],
+              ["choice", "☷ Četiri odgovora", "Izaberi prevod"],
+              ["cloze", "▤ Dopuni rečenicu", "Reč u kontekstu"],
+              ["mixed", "✧ Mešoviti test", "Svi načini zajedno"]
+            ].map(([id, label, desc]) => <button key={id} className={`v6-mode ${testMode === id ? "selected" : ""}`} onClick={() => startKnowledgeTest(id)}><strong>{label}</strong><small>{desc}</small></button>)}
+          </div>
+          {testQuestions.length === 0 ? (
+            <section className="v6-card v6-empty"><h3>Nema dovoljno podataka za ovaj test.</h3><p>{testMode === "choice" ? "Potrebne su najmanje četiri reči sa različitim prevodima." : testMode === "cloze" ? "Za dopunjavanje su potrebni primeri engleskih rečenica koji sadrže zadatu reč." : "Dodaj reči sa prevodom u svoj rečnik."}</p><button className="v6-main-btn" onClick={() => startKnowledgeTest("typing")}>Probaj kucanje prevoda</button></section>
+          ) : testIndex >= testQuestions.length ? (
+            <section className="v6-card v6-results"><div className="v6-icon">🏆</div><h3>Test završen!</h3><div className="v6-score">{testResults.filter(r => r.correct).length} / {testResults.length}</div><p>Tačno: {testResults.length ? Math.round(100 * testResults.filter(r => r.correct).length / testResults.length) : 0}%</p><div className="v6-mistakes">{testResults.filter(r => !r.correct).map(r => <div key={r.id}><b>{r.word}</b><span>Tvoj odgovor: {r.given || "(prazno)"}</span><span>Tačno: {r.expected}</span></div>)}</div><div className="v6-actions"><button className="v6-main-btn" onClick={() => startKnowledgeTest(testMode)}>Ponovi test</button><button className="v6-alt-btn" onClick={() => { setWorkspaceTab("home"); setView("list"); }}>Na početnu</button></div></section>
+          ) : (() => {
+            const question = testQuestions[testIndex];
+            const target = question.word;
+            const questionLabel = { typing: "PREVEDI NA SRPSKI", reverse: "PREVEDI NA ENGLESKI", choice: "IZABERI TAČAN PREVOD", cloze: "DOPUNI ENGLESKU REČENICU" }[question.type];
+            return <section className="v6-card"><div className="v6-card-top"><span>Pitanje {testIndex + 1} od {testQuestions.length}</span><span>{questionLabel}</span></div><div className="v6-track"><div style={{ width: `${100 * (testIndex + (testFeedback ? 1 : 0)) / testQuestions.length}%` }} /></div>
+              <div className="v6-prompt">{question.type === "cloze" ? <><div className="v6-context">{question.cloze.masked}</div><small>Upiši reč koja nedostaje. {question.cloze.sr ? `Prevod: ${question.cloze.sr}` : ""}</small></> : <><h3>{question.type === "reverse" ? target.wordSr || target.translation : target.word}</h3>{question.type !== "reverse" && <button onClick={() => speak(target.word)} className="v6-audio">🔊 Poslušaj izgovor</button>}</> }</div>
+              {question.type === "choice" ? <div className="v6-options">{question.options.map(option => <button key={option} disabled={Boolean(testFeedback)} className={`v6-option ${testFeedback && normalizeTestAnswer(option) === normalizeTestAnswer(target.wordSr || target.translation) ? "correct" : ""} ${testFeedback && testFeedback.given === option && !testFeedback.correct ? "wrong" : ""}`} onClick={() => submitKnowledgeAnswer(option)}>{option}</button>)}</div> : <form className="v6-form" onSubmit={e => { e.preventDefault(); submitKnowledgeAnswer(); }}><label htmlFor="v6-answer">Tvoj odgovor</label><input id="v6-answer" value={testInput} onChange={e => setTestInput(e.target.value)} disabled={Boolean(testFeedback)} autoComplete="off" placeholder={question.type === "typing" ? "Unesi srpski prevod..." : "Unesi englesku reč..."}/>{!testFeedback && <button type="submit" className="v6-main-btn" disabled={!testInput.trim()}>Proveri odgovor</button>}</form>}
+              {testFeedback && <div className={`v6-feedback ${testFeedback.correct ? "yes" : "no"}`}><b>{testFeedback.correct ? "✓ Tačno!" : "✕ Nije tačno"}</b><span>Tačan odgovor: <strong>{testFeedback.expected}</strong></span>{question.type === "cloze" && <small>{question.cloze.full}</small>}</div>}
+              <div className="v6-card-footer"><span><b>{testResults.filter(r => r.correct).length}</b> tačnih · <b>{testResults.filter(r => !r.correct).length}</b> netačnih</span>{testFeedback && <button className="v6-main-btn" onClick={nextKnowledgeQuestion}>{testIndex === testQuestions.length - 1 ? "Vidi rezultate →" : "Sledeće pitanje →"}</button>}</div>
+            </section>;
+          })()}
+          <div className="v6-note">✧ Testiranje radi lokalno u trenutnoj sesiji. Nijedan odgovor ne menja status reči ili SRS interval; u v7 možemo dodati trajnu statistiku testova.</div>
+        </main>
       )}
 
       {/* PRACTICE — v5.1 screenshot-inspired responsive dashboard */}
@@ -1137,7 +1271,14 @@ export default function VocabTracker() {
         </button>
       )}
 
-      <style>{`.vocab-practice-page { font-family: Georgia, serif; }
+      <style>{`
+.v6-page{max-width:1180px;margin:0 auto;padding:27px 20px 65px;font-family:Arial,sans-serif;color:var(--v-text)}
+.v6-heading{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap;margin-bottom:22px}.v6-heading h2{font-family:Georgia,serif;font-size:30px;margin:7px 0 8px}.v6-heading p{margin:0;color:var(--v-muted);font-size:14px}.v6-eyebrow{font-size:11px;font-weight:800;letter-spacing:2px;color:var(--v-accentSoft)}.v6-chip{padding:10px 15px;background:var(--v-panel);border:1px solid var(--v-border);border-radius:20px;font-size:12px;color:var(--v-muted)}
+.v6-modes{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:11px;margin-bottom:24px}.v6-mode{min-height:81px;border:1px solid var(--v-border);border-radius:12px;background:var(--v-panel);color:var(--v-text);padding:13px 11px;text-align:left;cursor:pointer}.v6-mode.selected{border-color:var(--v-accent);background:var(--v-selectedBg);box-shadow:0 0 0 1px var(--v-accent)}.v6-mode strong{display:block;font-size:13px;margin-bottom:7px}.v6-mode small{display:block;color:var(--v-muted);font-size:11px;line-height:1.35}
+.v6-card{background:var(--v-panel);border:1px solid var(--v-border);border-radius:18px;box-shadow:0 8px 24px rgba(0,0,0,.05);padding:29px;min-height:355px;max-width:830px;margin:0 auto}.v6-card-top{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--v-muted);font-size:12px;font-weight:700}.v6-track{height:7px;background:var(--v-elevated);border-radius:9px;overflow:hidden;margin-top:15px}.v6-track>div{height:100%;background:var(--v-accent);border-radius:9px;transition:width .2s}.v6-prompt{text-align:center;padding:30px 10px 25px}.v6-prompt h3{font-size:37px;font-style:italic;font-family:Georgia,serif;font-weight:500;margin:0 0 13px;overflow-wrap:anywhere}.v6-context{font-size:25px;font-family:Georgia,serif;line-height:1.5;margin-bottom:12px}.v6-prompt small{display:block;font-size:13px;color:var(--v-muted)}.v6-audio{border:0;background:none;color:var(--v-accentSoft);cursor:pointer;font-size:13px}.v6-options{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:670px;margin:0 auto 24px}.v6-option{background:var(--v-card);color:var(--v-text);border:1px solid var(--v-border);border-radius:10px;padding:16px;min-height:55px;cursor:pointer;font-size:16px;text-align:left}.v6-option.correct{background:var(--v-knownBg);border-color:#22a36a}.v6-option.wrong{background:var(--v-dangerBg);border-color:#de4e60}.v6-form{display:flex;flex-direction:column;gap:10px;max-width:610px;margin:0 auto 20px}.v6-form label{font-size:12px;font-weight:700;color:var(--v-muted)}.v6-form input{background:var(--v-input);color:var(--v-text);border:1px solid var(--v-border);border-radius:10px;padding:15px 17px;font-size:18px;width:100%;box-sizing:border-box}.v6-main-btn{background:var(--v-accent);color:var(--v-accentText);border:1px solid var(--v-accent);border-radius:10px;padding:12px 18px;font-size:14px;font-weight:700;cursor:pointer}.v6-main-btn:disabled{opacity:.45;cursor:default}.v6-alt-btn{border:1px solid var(--v-border);background:var(--v-card);color:var(--v-text);border-radius:10px;padding:12px 18px;cursor:pointer}.v6-feedback{display:flex;flex-direction:column;gap:5px;border-radius:10px;padding:16px;max-width:640px;margin:14px auto}.v6-feedback.yes{background:var(--v-knownBg);border:1px solid #22a36a}.v6-feedback.no{background:var(--v-dangerBg);border:1px solid #de4e60}.v6-feedback small{color:var(--v-muted)}.v6-card-footer{display:flex;justify-content:space-between;align-items:center;gap:10px;border-top:1px solid var(--v-border);padding-top:18px;margin-top:22px;font-size:13px;color:var(--v-muted)}.v6-card-footer b{color:var(--v-text)}.v6-results,.v6-empty{text-align:center}.v6-results h3{font-family:Georgia,serif;font-size:27px}.v6-icon{font-size:50px}.v6-score{font-size:45px;color:var(--v-accentSoft);font-weight:700}.v6-mistakes{text-align:left;max-width:600px;margin:20px auto}.v6-mistakes>div{display:flex;flex-direction:column;gap:4px;padding:11px;border-bottom:1px solid var(--v-border);font-size:13px}.v6-mistakes span{color:var(--v-muted)}.v6-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}.v6-note{max-width:830px;margin:18px auto 0;color:var(--v-muted);font-size:12px;line-height:1.5}
+@media(max-width:1000px){.v6-modes{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:620px){.v6-page{padding:16px 12px 40px}.v6-modes{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.v6-mode{padding:10px}.v6-card{padding:16px}.v6-prompt h3{font-size:30px}.v6-context{font-size:19px}.v6-options{grid-template-columns:1fr}.v6-card-footer{flex-wrap:wrap}.v6-heading h2{font-size:24px}}
+
+.vocab-practice-page { font-family: Georgia, serif; }
 .v51-modes {display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:30px}
 .v51-mode-buttons {display:flex;flex-wrap:wrap;gap:10px}
 .v51-mode {border:1px solid var(--v-border);background:var(--v-panel);color:var(--v-text);border-radius:24px;padding:14px 22px;font-size:16px;font-weight:650;cursor:pointer}
