@@ -58,6 +58,28 @@ const smartDb = {
   }
 };
 
+
+const insightsDb = {
+  async load(token) {
+    const headers={apikey:SUPABASE_KEY, Authorization:`Bearer ${token}`};
+    const [a,b]=await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/vocab_test_attempts?select=word_id,mode,correct,answered_at,session_id&order=answered_at.desc&limit=10000`,{headers}),
+      fetch(`${SUPABASE_URL}/rest/v1/vocab_word_tags?select=word_id,tag&limit=10000`,{headers})
+    ]);
+    if(!a.ok || !b.ok)throw new Error("v7 tabele nisu dostupne. Pokreni SQL migraciju za v7.");
+    return {attempts:await a.json(),tags:await b.json()};
+  },
+  async saveTest(token,attempts) {
+    const response=await fetch(`${SUPABASE_URL}/rest/v1/vocab_test_attempts`,{method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${token}`,"Content-Type":"application/json",Prefer:"return=minimal"},body:JSON.stringify(attempts)});
+    if(!response.ok)throw new Error("Nije uspelo čuvanje testa u Supabase.");
+  },
+  async replaceTags(token,userId,wordId,tags) {
+    // RPC atomically replaces tags for the authenticated user's word.
+    const response=await fetch(`${SUPABASE_URL}/rest/v1/rpc/set_vocab_word_tags`,{method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({p_word_id:String(wordId),p_tags:tags})});
+    if(!response.ok)throw new Error("Čuvanje tagova nije uspelo.");
+  }
+};
+
 function getLocalDayStart() {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -215,6 +237,42 @@ function buildKnowledgeQuestions(words, mode, maxCount = 20) {
   return all;
 }
 
+
+// v7: CSV parser with quoted values, UTF-8 BOM and line breaks inside quotes.
+function parseVocabCsv(input) {
+  const text = String(input || "").replace(/^\uFEFF/, "");
+  const first = text.split(/\r?\n/, 1)[0] || "";
+  const delimiter = (first.match(/;/g) || []).length > (first.match(/,/g) || []).length ? ";" : ",";
+  const rows = []; let row = [], cell = "", quoted = false;
+  for (let i=0;i<text.length;i++) {
+    const ch=text[i];
+    if (ch === '"') { if (quoted && text[i+1] === '"') { cell+='"'; i++; } else quoted=!quoted; }
+    else if (ch === delimiter && !quoted) {row.push(cell);cell="";}
+    else if ((ch === "\n" || ch === "\r") && !quoted) { if (ch === "\r" && text[i+1] === "\n") i++; row.push(cell); if(row.some(v=>v.trim())) rows.push(row);row=[];cell=""; }
+    else cell+=ch;
+  }
+  if (quoted) throw new Error("CSV ima nezatvorene navodnike.");
+  row.push(cell);if(row.some(v=>v.trim()))rows.push(row);
+  if (!rows.length) return [];
+  const headers=rows.shift().map(h=>h.trim().toLowerCase());
+  const en=headers.findIndex(h=>["word","english","rec","reč","engleski"].includes(h));
+  const sr=headers.findIndex(h=>["translation","word_sr","srpski","prevod"].includes(h));
+  const tag=headers.indexOf("tags");
+  if(en<0 || sr<0)throw new Error("CSV mora imati kolone word i translation.");
+  return rows.map(r=>({word:(r[en]||"").trim(),translation:(r[sr]||"").trim(), tags:tag>=0?(r[tag]||"").split("|").map(v=>v.trim()).filter(Boolean):[]}))
+    .filter(r=>r.word && r.translation);
+}
+function vocabCsvCell(value) {const safe=String(value??"").replace(/^[\s]*[=+@-]/, m=>"'"+m);return '"'+safe.replace(/"/g,'""')+'"';}
+function downloadVocabCsv(rows, name) {
+ const columns=["word","translation","status","tags"];
+ const csv="\uFEFF"+[columns.join(";"),...rows.map(r=>columns.map(c=>vocabCsvCell(r[c])).join(";"))].join("\r\n");
+ const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+ const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+const vocabDateKey = value => {const d=new Date(value);return Number.isNaN(d.getTime())?"":`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;};
+const vocabCardStyle = {background:"var(--v-panel)",border:"1px solid var(--v-border)",borderRadius:16,padding:20};
+
 export default function VocabTracker() {
   const [emailConfirmed, setEmailConfirmed] = useState(false);
   const [user, setUser] = useState(null);
@@ -246,6 +304,17 @@ export default function VocabTracker() {
   const [testInput, setTestInput] = useState("");
   const [testFeedback, setTestFeedback] = useState(null);
   const [testResults, setTestResults] = useState([]);
+  const [testSessionId, setTestSessionId] = useState(null);
+  const [testHistory, setTestHistory] = useState([]);
+  const [wordTags, setWordTags] = useState({});
+  const [insightsReady, setInsightsReady] = useState(false);
+  const [insightsError, setInsightsError] = useState("");
+  const [tagFilter, setTagFilter] = useState("all");
+  const [importRows, setImportRows] = useState([]);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importNotice, setImportNotice] = useState("");
+  const [selectedTagInput, setSelectedTagInput] = useState("");
+  const [insightsRange, setInsightsRange] = useState(7);
   const [srsSchedules, setSrsSchedules] = useState({});
   const [srsHistory, setSrsHistory] = useState([]);
   const [srsReady, setSrsReady] = useState(false);
@@ -349,6 +418,67 @@ export default function VocabTracker() {
     return () => { cancelled = true; };
   }, [user?.id, token]);
 
+  useEffect(() => {
+    if(!user?.id || !token){setTestHistory([]);setWordTags({});setInsightsReady(false);return;}
+    let cancelled=false;
+    setInsightsReady(false);setInsightsError("");
+    insightsDb.load(token).then(data=>{
+      if(cancelled)return;
+      setTestHistory(data.attempts);
+      const next={};
+      for(const tagRow of data.tags){(next[String(tagRow.word_id)] ||= []).push(tagRow.tag);}
+      setWordTags(next);setInsightsReady(true);
+    }).catch(error=>{if(!cancelled){setInsightsError(error.message);setInsightsReady(false);}});
+    return ()=>{cancelled=true;};
+  },[user?.id,token]);
+
+  const allTags=[...new Set(Object.values(wordTags).flat())].sort((a,b)=>a.localeCompare(b,"sr"));
+  const saveWordTags=async (wordId,newTags)=>{
+    if(!insightsReady){showToast(insightsError||"Pokreni v7 SQL migraciju.","#e11d48");return;}
+    const tags=[...new Set(newTags.map(x=>x.trim()).filter(Boolean))].slice(0,12);
+    if(tags.some(x=>x.length>40)){showToast("Tag može imati najviše 40 znakova.","#e11d48");return;}
+    try {await insightsDb.replaceTags(token,user.id,wordId,tags);setWordTags(prev=>({...prev,[String(wordId)]:tags}));showToast("Tagovi sačuvani ✓");}
+    catch(e){showToast(e.message,"#e11d48");}
+  };
+  const importVocabFile=async (file)=>{
+    if(!file)return;
+    setImportNotice("");setImportRows([]);
+    try{
+      if(file.size>2_000_000)throw new Error("Maksimalna veličina CSV fajla je 2 MB.");
+      const parsed=parseVocabCsv(await file.text());
+      const existing=new Set(words.map(w=>w.word.trim().toLocaleLowerCase("en")));
+      const unique=new Set();
+      const fresh=parsed.filter(r=>{const k=r.word.toLocaleLowerCase("en");if(existing.has(k)||unique.has(k))return false;unique.add(k);return true;});
+      setImportRows(fresh.slice(0,500));
+      setImportNotice(`CSV: ${parsed.length} redova, ${fresh.length} novih bez duplikata${fresh.length>500?" (prvih 500 spremno za uvoz)":""}.`);
+    }catch(e){setImportNotice(e.message);}
+  };
+  const commitVocabImport=async()=>{
+    if(!importRows.length||importBusy)return;
+    setImportBusy(true);let imported=0;let failed=0;
+    for(const item of importRows){
+      try{
+        const row=await db.insert({word:item.word,wordSr:item.translation,translation:item.translation,ipa:"",partOfSpeech:"",synonyms:[],sentences:[],notes:"",imageUrl:null},token);
+        if(!row?.id)throw new Error("Nije vraćen ID");
+        setWords(prev=>[normalize(row),...prev]);imported++;
+        if(item.tags.length && insightsReady){
+          try{await insightsDb.replaceTags(token,user.id,row.id,item.tags);setWordTags(prev=>({...prev,[String(row.id)]:item.tags}));}
+          catch(e){failed++;}
+        }
+      }catch(e){failed++;}
+    }
+    setImportRows([]);setImportBusy(false);
+    setImportNotice(`Uvezeno: ${imported}. Greške (uključujući tagove): ${failed}.`);
+  };
+  const exportVocabCsv=()=>downloadVocabCsv(filteredWords.map(w=>({word:w.word,translation:w.wordSr||w.translation,status:w.status,tags:(wordTags[String(w.id)]||[]).join("|" )})),"vokabular_export.csv");
+  const saveFinishedTest=async(results,sessionId)=>{
+    if(!results.length||!sessionId||!insightsReady){if(!insightsReady)showToast("Test završen, ali v7 statistika nije aktivna.","#d97706");return;}
+    const now=new Date().toISOString();
+    const rows=results.map(r=>({session_id:sessionId,word_id:String(r.wordId),mode:r.type,correct:r.correct,answered_at:now}));
+    try{await insightsDb.saveTest(token,rows);setTestHistory(prev=>[...rows,...prev]);}
+    catch(e){showToast("Test je završen, ali istorija nije sačuvana.","#e11d48");}
+  };
+
   const showToast = (msg, color = "#22c55e") => { setToast({ msg, color }); setTimeout(() => setToast(null), 2500); };
 
   const lookupWord = async (word) => {
@@ -426,7 +556,7 @@ export default function VocabTracker() {
     (w.word || "").toLowerCase().includes(search.toLowerCase()) ||
     (w.translation || "").toLowerCase().includes(search.toLowerCase())
   );
-  const filteredWords = searchedWords.filter(w => filter === "all" || w.status === filter);
+  const filteredWords = searchedWords.filter(w => (filter === "all" || w.status === filter) && (tagFilter === "all" || (wordTags[String(w.id)]||[]).includes(tagFilter)));
 
   const todayStart = getLocalDayStart();
   const todaysReviews = srsHistory.filter(r => new Date(r.reviewed_at).getTime() >= todayStart);
@@ -445,6 +575,14 @@ export default function VocabTracker() {
       practiceMode === "smart" ? 0 : (a.addedAt || "").localeCompare(b.addedAt || ""));
   const currentReview = reviewWords[reviewIndex % Math.max(1, reviewWords.length)];
   const smartRemaining = reviewWords.length;
+  const combinedAttempts=[...srsHistory.map(r=>({word_id:String(r.word_id),correct:r.rating==="good",answered_at:r.reviewed_at,mode:"SRS"})),...testHistory];
+  const cutoff=Date.now()-insightsRange*86400000;
+  const recentAttempts=combinedAttempts.filter(r=>new Date(r.answered_at).getTime()>=cutoff);
+  const correctAttempts=recentAttempts.filter(r=>r.correct).length;
+  const hardestWords=Object.entries(recentAttempts.reduce((o,r)=>{const id=String(r.word_id);const x=o[id]||{wrong:0,total:0};x.total++;if(!r.correct)x.wrong++;o[id]=x;return o;},{}))
+    .map(([id,stats])=>({word:words.find(w=>String(w.id)===id)?.word||"(Obrisana reč)",...stats}))
+    .filter(v=>v.wrong>0).sort((a,b)=>b.wrong-a.wrong||b.total-a.total).slice(0,10);
+  const dailyInsights=Array.from({length:insightsRange},(_,i)=>{const date=new Date();date.setDate(date.getDate()-(insightsRange-1-i));const key=vocabDateKey(date);const day=recentAttempts.filter(r=>vocabDateKey(r.answered_at)===key);return {key,label:date.toLocaleDateString("sr-RS",{day:"2-digit",month:"2-digit"}),correct:day.filter(r=>r.correct).length,wrong:day.filter(r=>!r.correct).length};});
   const statusLabel = s => ({ new: "Novo", learning: "Učim", known: "Znam" }[s] || s);
   const statusDot = s => ({ new: "#3b82f6", learning: "#f59e0b", known: "#22c55e" }[s] || "var(--v-muted)");
   const counts = { all: words.length, new: words.filter(w => w.status === "new").length, learning: words.filter(w => w.status === "learning").length, known: words.filter(w => w.status === "known").length };
@@ -658,6 +796,7 @@ export default function VocabTracker() {
     setTestInput("");
     setTestFeedback(null);
     setTestResults([]);
+    setTestSessionId(crypto.randomUUID());
     setView("test");
   };
   const submitKnowledgeAnswer = (answer = testInput) => {
@@ -666,12 +805,13 @@ export default function VocabTracker() {
     const expected = question.type === "reverse" || question.type === "cloze"
       ? question.word.word : (question.word.wordSr || question.word.translation);
     const correct = acceptedTestAnswers(expected).includes(normalizeTestAnswer(answer));
-    const result = { id: question.id, word: question.word.word, correct, type: question.type, expected, given: String(answer || "") };
+    const result = { id: question.id, wordId: question.word.id, word: question.word.word, correct, type: question.type, expected, given: String(answer || "") };
     setTestResults(prev => [...prev, result]);
     setTestFeedback(result);
   };
   const nextKnowledgeQuestion = () => {
     if (!testFeedback) return;
+    if(testIndex===testQuestions.length-1)saveFinishedTest(testResults,testSessionId);
     setTestIndex(i => i + 1);
     setTestInput("");
     setTestFeedback(null);
@@ -832,6 +972,7 @@ export default function VocabTracker() {
                 {label}
               </button>
             ))}
+            <button onClick={() => {setView("insights");setCombineMode(false);}} style={{border:"1px solid var(--v-border)",background:view==="insights"?"var(--v-accent)":"var(--v-panel)",color:view==="insights"?"var(--v-accentText)":"var(--v-text)",padding:"10px 17px",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13}}>▥ Statistika</button>
             <button onClick={() => startPractice(srsReady ? "smart" : "free")} disabled={words.length === 0}
               style={{ border: "1px solid " + (view === "review" ? "var(--v-accent)" : "var(--v-border)"), background: view === "review" ? "var(--v-accent)" : "var(--v-panel)", color: view === "review" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: words.length ? 1 : 0.5 }}>
               ◎  Vežbanje
@@ -983,6 +1124,7 @@ export default function VocabTracker() {
                 {selected.sentences.map((s, i) => <SentenceCard key={i} s={s} i={i} word={selected.word} onDelete={idx => { const updated = selected.sentences.filter((_, j) => j !== idx); setWords(prev => prev.map(w => w.id === selected.id ? { ...w, sentences: updated } : w)); setSelected(prev => ({ ...prev, sentences: updated })); }} onUpdate={(idx, updatedS) => { const updated = selected.sentences.map((x, j) => j === idx ? updatedS : x); setWords(prev => prev.map(w => w.id === selected.id ? { ...w, sentences: updated } : w)); setSelected(prev => ({ ...prev, sentences: updated })); }} />)}
               </div>
             )}
+            <section style={{...vocabCardStyle,marginBottom:16,padding:12}}><div style={{fontSize:12,color:"var(--v-muted)",marginBottom:8}}>KATEGORIJE / TAGOVI</div><div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>{(wordTags[String(selected.id)]||[]).map(tag=><button key={tag} title="Ukloni tag" onClick={()=>saveWordTags(selected.id,(wordTags[String(selected.id)]||[]).filter(t=>t!==tag))} style={{border:"1px solid var(--v-border)",borderRadius:20,background:"var(--v-elevated)",color:"var(--v-text)",padding:"5px 10px",cursor:"pointer"}}>{tag} ×</button>)}</div><form onSubmit={e=>{e.preventDefault();saveWordTags(selected.id,[...(wordTags[String(selected.id)]||[]),selectedTagInput]);setSelectedTagInput("");}} style={{display:"flex",gap:8,flexWrap:"wrap"}}><input value={selectedTagInput} onChange={e=>setSelectedTagInput(e.target.value)} placeholder="npr. IT, Business..." maxLength={40} style={{...inp,maxWidth:240}}/><button type="submit" disabled={!insightsReady||!selectedTagInput.trim()} style={{background:"var(--v-accent)",color:"var(--v-accentText)",border:0,borderRadius:8,padding:"8px 14px"}}>+ Dodaj tag</button></form></section>
             {selected.notes && <div style={{ marginBottom: 16 }}><div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 4, textTransform: "uppercase" }}>Beleške</div><div style={{ fontSize: 13, color: "var(--v-muted)" }}>{selected.notes}</div></div>}
             <div style={{ fontSize: 11, color: "var(--v-subtle)", fontFamily: "monospace" }}>
               Dodano: {formatDate(selected.addedAt)} · Ponovljeno: {selected.reviewCount}x
@@ -995,7 +1137,7 @@ export default function VocabTracker() {
       {/* v6: local-only tests; never modify SRS or vocabulary */}
       {view === "test" && (
         <main className="v6-page">
-          <div className="v6-heading"><div><div className="v6-eyebrow">KNOWLEDGE TESTS · V6</div><h2>Proveri koliko znaš</h2><p>Pet načina vežbanja. Rezultati testa ne menjaju rečnik ni SRS raspored.</p></div><span className="v6-chip">{words.length} reči u rečniku</span></div>
+          <div className="v6-heading"><div><div className="v6-eyebrow">KNOWLEDGE TESTS · V6</div><h2>Proveri koliko znaš</h2><p>Pet načina vežbanja. Rezultati se beleže u istoriju, ali ne menjaju SRS raspored.</p></div><span className="v6-chip">{words.length} reči u rečniku</span></div>
           <div className="v6-modes">
             {[
               ["typing", "✎ Engleski → srpski", "Ukucaj prevod"],
@@ -1020,9 +1162,18 @@ export default function VocabTracker() {
               <div className="v6-card-footer"><span><b>{testResults.filter(r => r.correct).length}</b> tačnih · <b>{testResults.filter(r => !r.correct).length}</b> netačnih</span>{testFeedback && <button className="v6-main-btn" onClick={nextKnowledgeQuestion}>{testIndex === testQuestions.length - 1 ? "Vidi rezultate →" : "Sledeće pitanje →"}</button>}</div>
             </section>;
           })()}
-          <div className="v6-note">✧ Testiranje radi lokalno u trenutnoj sesiji. Nijedan odgovor ne menja status reči ili SRS interval; u v7 možemo dodati trajnu statistiku testova.</div>
+          <div className="v6-note">✧ v7: Završeni testovi se čuvaju u Supabase-u (posle poslednjeg pitanja); odgovori ne menjaju status reči ni SRS interval.</div>
         </main>
       )}
+
+      {view === "insights" && <main style={{maxWidth:1080,margin:"0 auto",padding:"24px",display:"grid",gap:18}}>
+        <div style={{display:"flex",justifyContent:"space-between",gap:12,flexWrap:"wrap",alignItems:"center"}}><div><div style={{fontSize:11,color:"var(--v-accent)",letterSpacing:2}}>INSIGHTS & ORGANIZATION · V7</div><h2 style={{margin:"7px 0"}}>Statistika učenja</h2><p style={{margin:0,color:"var(--v-muted)"}}>Istorija SRS ponavljanja i završenih testova — bez menjanja postojećih ocena.</p></div><select aria-label="Period statistike" value={insightsRange} onChange={e=>setInsightsRange(Number(e.target.value))} style={{background:"var(--v-input)",color:"var(--v-text)",border:"1px solid var(--v-border)",padding:12,borderRadius:10}}><option value={7}>7 dana</option><option value={14}>14 dana</option><option value={30}>30 dana</option></select></div>
+        {!insightsReady&&<div style={{...vocabCardStyle,color:"#d97706"}}>⚠ {insightsError||"Učitavam statistiku..."}</div>}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(175px,1fr))",gap:12}}>{[["Pokušaji",recentAttempts.length],["Tačno",correctAttempts],["Uspešnost",recentAttempts.length?Math.round(correctAttempts/recentAttempts.length*100)+"%":"—"],["SRS ponavljanja",recentAttempts.filter(r=>r.mode==="SRS").length],["Test pitanja",recentAttempts.filter(r=>r.mode!=="SRS").length]].map(([label,value])=><div key={label} style={vocabCardStyle}><div style={{fontSize:12,color:"var(--v-muted)"}}>{label}</div><strong style={{display:"block",fontSize:28,marginTop:8,color:"var(--v-accent)"}}>{value}</strong></div>)}</div>
+        <section style={vocabCardStyle}><h3 style={{marginTop:0}}>Aktivnost po danima</h3><div style={{display:"flex",gap:5,alignItems:"end",overflowX:"auto",minHeight:180,paddingTop:10}}>{dailyInsights.map(day=><div key={day.key} title={`${day.label}: ${day.correct} tačno, ${day.wrong} netačno`} style={{flex:"1 0 18px",minWidth:18,textAlign:"center"}}><div style={{display:"flex",flexDirection:"column",justifyContent:"end",height:115,borderBottom:"1px solid var(--v-border)"}}><div style={{height:`${Math.min(100,day.wrong*7)}%`,background:"#e11d48",borderRadius:"4px 4px 0 0",minHeight:day.wrong?3:0}}/><div style={{height:`${Math.min(100,day.correct*7)}%`,background:"#22a36a",minHeight:day.correct?3:0}}/></div><small style={{fontSize:9,color:"var(--v-muted)"}}>{day.label}</small></div>)}</div><p style={{fontSize:12,color:"var(--v-muted)"}}>🟩 Tačno / Znam &nbsp; 🟥 Netačno / Teško / Ne znam. Visina je ilustrativno ograničena za velike vrednosti.</p></section>
+        <section style={vocabCardStyle}><h3 style={{marginTop:0}}>Reči sa najviše grešaka</h3>{hardestWords.length===0?<p style={{color:"var(--v-muted)"}}>Za ovaj period nema zabeleženih grešaka.</p>:hardestWords.map((item,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:"1px solid var(--v-border)",padding:"9px 0",gap:12}}><strong>{item.word}</strong><span style={{color:"var(--v-muted)"}}>{item.wrong} grešaka / {item.total} pokušaja</span></div>)}</section>
+        <section style={vocabCardStyle}><h3 style={{marginTop:0}}>Kategorije i tagovi</h3><p style={{color:"var(--v-muted)",fontSize:13}}>Tagove dodaješ otvaranjem detalja pojedinačne reči. Zatim ih filtriraš u Rečniku.</p><div style={{display:"flex",flexWrap:"wrap",gap:8}}>{allTags.length?allTags.map(tag=><button key={tag} onClick={()=>{setTagFilter(tag);setWorkspaceTab("dictionary");setView("list");}} style={{background:"var(--v-elevated)",color:"var(--v-text)",border:"1px solid var(--v-border)",borderRadius:20,padding:"8px 13px",cursor:"pointer"}}>{tag} ({words.filter(w=>(wordTags[String(w.id)]||[]).includes(tag)).length})</button>):<span style={{color:"var(--v-muted)"}}>Još nema tagova.</span>}</div></section>
+      </main>}
 
       {/* PRACTICE — v5.1 screenshot-inspired responsive dashboard */}
       {view === "review" && (
@@ -1147,6 +1298,9 @@ export default function VocabTracker() {
               style={{ background: "var(--v-input)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "11px 12px", borderRadius: 9, cursor: "pointer", fontSize: 12, maxWidth: "100%" }}>
               <option value="newest">↓ Najnovije</option><option value="oldest">↑ Najstarije</option><option value="az">A–Z</option><option value="za">Z–A</option>
             </select>
+            <select value={tagFilter} onChange={e=>setTagFilter(e.target.value)} aria-label="Filter po tagu" style={{background:"var(--v-input)",color:"var(--v-text)",border:"1px solid var(--v-border)",borderRadius:9,padding:"10px 12px"}}><option value="all">Svi tagovi</option>{allTags.map(tag=><option key={tag} value={tag}>{tag}</option>)}</select>
+            <button onClick={exportVocabCsv} style={{background:"var(--v-input)",color:"var(--v-text)",border:"1px solid var(--v-border)",borderRadius:9,padding:"10px 12px",cursor:"pointer"}}>↓ CSV / Excel</button>
+            <label style={{background:"var(--v-input)",color:"var(--v-text)",border:"1px solid var(--v-border)",borderRadius:9,padding:"10px 12px",cursor:"pointer",fontSize:12}}>↑ Uvezi CSV<input type="file" accept=".csv,text/csv" style={{display:"none"}} onChange={e=>{importVocabFile(e.target.files?.[0]);e.target.value="";}} /></label>
             {filteredWords.length > 0 && <button onClick={exportPDF} title="Izvezi PDF" style={{ background: "var(--v-input)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "11px 13px", borderRadius: 9, cursor: "pointer", fontSize: 12 }}>↓ PDF</button>}
             <button onClick={() => { setCombineMode(!combineMode); setSelectedIds([]); setCombineResult(null); }} style={{ background: combineMode ? "var(--v-accent)" : "var(--v-input)", border: "1px solid var(--v-border)", color: combineMode ? "var(--v-accentText)" : "var(--v-text)", padding: "11px 13px", borderRadius: 9, cursor: "pointer", fontSize: 12 }}>⊕ Kombiniraj</button>
             <div style={{ display: "flex", background: "var(--v-input)", border: "1px solid var(--v-border)", borderRadius: 9, overflow: "hidden", marginLeft: "auto" }}>
@@ -1155,6 +1309,7 @@ export default function VocabTracker() {
             </div>
           </div>
 
+          {(importNotice || importRows.length>0) && <div style={{...vocabCardStyle,marginBottom:18}}><strong>CSV uvoz</strong><p style={{color:"var(--v-muted)"}}>{importNotice}</p>{importRows.length>0&&<><p>Primer prvih 5: {importRows.slice(0,5).map(r=>r.word).join(", ")}</p><button onClick={commitVocabImport} disabled={importBusy} style={{background:"var(--v-accent)",color:"var(--v-accentText)",padding:"10px 18px",border:0,borderRadius:9,cursor:"pointer"}}>{importBusy?"Uvozim...":`Potvrdi uvoz (${importRows.length})`}</button></>}</div>}
           {/* Combine result */}
           {combineResult && (
             <div style={{ background: "var(--v-panel)", border: "1px solid var(--v-accent)", borderRadius: 12, padding: 20, marginBottom: 20 }}>
@@ -1207,6 +1362,7 @@ export default function VocabTracker() {
                           <div style={{ fontSize: 14, fontStyle: "italic", color: "var(--v-text)", fontWeight: "bold", marginBottom: 2 }}>{w.word}</div>
                           {w.ipa && <div style={{ fontSize: 11, color: "var(--v-accent)", fontFamily: "monospace", marginBottom: 3 }}>{w.ipa}</div>}
                           {w.translation && <div style={{ fontSize: 12, color: "var(--v-muted)" }}>{w.translation}</div>}
+                        {(wordTags[String(w.id)]||[]).length>0&&<div style={{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}}>{wordTags[String(w.id)].map(tag=><span key={tag} style={{fontSize:10,background:"var(--v-elevated)",color:"var(--v-accentSoft)",padding:"2px 7px",borderRadius:10}}>{tag}</span>)}</div>}
                           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                             {[["★","new","#3b82f6"],["?","learning","#e11d48"],["✓","known","#22c55e"]].map(([lbl, s, c]) => (
                               <button key={s} onClick={e => { e.stopPropagation(); updateStatus(w.id, s); }}
