@@ -128,6 +128,10 @@ export default function VocabTracker() {
   const [revealed, setRevealed] = useState(false);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [sortOrder, setSortOrder] = useState(() => {
+    const saved = localStorage.getItem("vocab_sort");
+    return ["newest", "oldest", "az", "za"].includes(saved) ? saved : "newest";
+  });
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dbError, setDbError] = useState(null);
@@ -239,11 +243,19 @@ export default function VocabTracker() {
     showToast("Obrisano", "#ef4444");
   };
 
-  const filteredWords = words.filter(w => {
-    const mf = filter === "all" || w.status === filter;
-    const ms = w.word?.toLowerCase().includes(search.toLowerCase()) || w.translation?.toLowerCase().includes(search.toLowerCase());
-    return mf && ms;
+  // Jedinstven redosled za listu, Board i PDF; bez izmena u Supabase bazi.
+  const sortedWords = [...words].sort((a, b) => {
+    if (sortOrder === "az") return (a.word || "").localeCompare(b.word || "", "en", { sensitivity: "base" });
+    if (sortOrder === "za") return (b.word || "").localeCompare(a.word || "", "en", { sensitivity: "base" });
+    const aTime = a.addedAt ? new Date(a.addedAt).getTime() || 0 : 0;
+    const bTime = b.addedAt ? new Date(b.addedAt).getTime() || 0 : 0;
+    return sortOrder === "oldest" ? aTime - bTime : bTime - aTime;
   });
+  const searchedWords = sortedWords.filter(w =>
+    (w.word || "").toLowerCase().includes(search.toLowerCase()) ||
+    (w.translation || "").toLowerCase().includes(search.toLowerCase())
+  );
+  const filteredWords = searchedWords.filter(w => filter === "all" || w.status === filter);
 
   const reviewWords = words.filter(w => w.status === "learning");
   const currentReview = reviewWords[reviewIndex];
@@ -728,6 +740,21 @@ export default function VocabTracker() {
           {/* Actions bar */}
           <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pretraži..." style={{ flex: 1, minWidth: 120, background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#f0ebe3", padding: "10px 14px", borderRadius: 8, fontSize: 14, fontFamily: "Georgia, serif" }} />
+            <select
+              value={sortOrder}
+              onChange={e => {
+                setSortOrder(e.target.value);
+                localStorage.setItem("vocab_sort", e.target.value);
+              }}
+              aria-label="Sortiraj reči"
+              title="Sortiraj reči"
+              style={{ background: "#1a1a2e", border: "1px solid #6366f1", color: "#a5b4fc", padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", maxWidth: "100%" }}
+            >
+              <option value="newest">↓ Najnovije</option>
+              <option value="oldest">↑ Najstarije</option>
+              <option value="az">A–Z</option>
+              <option value="za">Z–A</option>
+            </select>
             {filteredWords.length > 0 && <button onClick={exportPDF} style={{ background: "rgba(99,102,241,0.15)", border: "1px solid #6366f1", color: "#a5b4fc", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>↓ PDF</button>}
             <button onClick={() => { setCombineMode(!combineMode); setSelectedIds([]); setCombineResult(null); }} style={{ background: combineMode ? "#6366f1" : "rgba(99,102,241,0.15)", border: "1px solid #6366f1", color: combineMode ? "#fff" : "#a5b4fc", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>⊕ Kombiniraj</button>
             {reviewWords.length > 0 && <button onClick={() => { setView("review"); setReviewIndex(0); setRevealed(false); }} style={{ background: "#f59e0b", border: "none", color: "#fff", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>🔁 Ponavljaj ({reviewWords.length})</button>}
@@ -775,7 +802,7 @@ export default function VocabTracker() {
           {layoutView === "board" && (
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: 12, alignItems: "start" }}>
               {[["new","★ Novo","#3b82f6","rgba(59,130,246,0.08)"],["learning","? Učim","#e11d48","rgba(225,29,72,0.08)"],["known","✓ Znam","#22c55e","rgba(34,197,94,0.08)"]].map(([status, label, color, bg]) => {
-                const col = words.filter(w => w.status === status && (search ? w.word.toLowerCase().includes(search.toLowerCase()) || w.translation?.toLowerCase().includes(search.toLowerCase()) : true));
+                const col = searchedWords.filter(w => w.status === status);
                 return (
                   <div key={status} style={{ background: bg, border: "1px solid " + color + "33", borderRadius: 12, overflow: "hidden" }}>
                     <div style={{ padding: "10px 14px", borderBottom: "1px solid " + color + "33", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
