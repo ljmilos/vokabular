@@ -315,6 +315,22 @@ export default function VocabTracker() {
   const [importNotice, setImportNotice] = useState("");
   const [selectedTagInput, setSelectedTagInput] = useState("");
   const [insightsRange, setInsightsRange] = useState(7);
+  // v8 AI Learning: standalone exercises; no writes to SRS or vocabulary.
+  const [aiLabMode, setAiLabMode] = useState("story");
+  const [aiLabBusy, setAiLabBusy] = useState(false);
+  const [aiLabError, setAiLabError] = useState("");
+  const [aiLabStory, setAiLabStory] = useState(null);
+  const [aiLabExercises, setAiLabExercises] = useState([]);
+  const [aiLabExerciseIndex, setAiLabExerciseIndex] = useState(0);
+  const [aiLabAnswer, setAiLabAnswer] = useState("");
+  const [aiLabChecked, setAiLabChecked] = useState(false);
+  const [aiLabShowTranslation, setAiLabShowTranslation] = useState(false);
+  const [aiLabListenWord, setAiLabListenWord] = useState(null);
+  const [aiLabChat, setAiLabChat] = useState([]);
+  const [aiLabChatInput, setAiLabChatInput] = useState("");
+  const [aiLabWordCount, setAiLabWordCount] = useState(5);
+  const [aiLabSelectedTag, setAiLabSelectedTag] = useState("all");
+
   const [srsSchedules, setSrsSchedules] = useState({});
   const [srsHistory, setSrsHistory] = useState([]);
   const [srsReady, setSrsReady] = useState(false);
@@ -788,6 +804,74 @@ export default function VocabTracker() {
     setAuthLoading(false);
   };
 
+  // v8 uses the existing /api/claude proxy. It does not expose any new API key.
+  const requestAiLearning = async (prompt, maxTokens = 850) => {
+    const response = await fetch("/api/claude", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: maxTokens,
+        messages: [{ role: "user", content: prompt }] })
+    });
+    if (!response.ok) throw new Error(`AI servis nije dostupan (${response.status}).`);
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message || "AI servis je prijavio grešku.");
+    const content = data.content?.filter(part => part.type === "text").map(part => part.text).join("\n") || "";
+    if (!content.trim()) throw new Error("AI servis nije vratio odgovor.");
+    return content.trim();
+  };
+  const parseAiLearningJson = text => {
+    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    try { return JSON.parse(cleaned); }
+    catch { throw new Error("AI odgovor nije u očekivanom formatu. Pokušaj ponovo."); }
+  };
+  const aiLabPool = words.filter(w =>
+    (aiLabSelectedTag === "all" || (wordTags[String(w.id)] || []).includes(aiLabSelectedTag)) &&
+    String(w.word || "").trim() && String(w.wordSr || w.translation || "").trim());
+  const aiLabChosenWords = aiLabPool.slice(0, aiLabWordCount);
+  const aiLabVocabulary = aiLabChosenWords.map(w => `${w.word} (${w.wordSr || w.translation})`).join(", ");
+  const aiLabTags = [...new Set(Object.values(wordTags).flat().filter(Boolean))].sort((a, b) => a.localeCompare(b, "sr"));
+  const startAiLearning = async (mode = aiLabMode) => {
+    setAiLabMode(mode); setAiLabError(""); setAiLabChecked(false);
+    setAiLabAnswer(""); setAiLabExerciseIndex(0); setAiLabShowTranslation(false);
+    if (mode === "listen") {
+      if (!aiLabChosenWords.length) { setAiLabError("Nema reči za ovu kategoriju."); return; }
+      setAiLabListenWord(aiLabChosenWords[Math.floor(Math.random() * aiLabChosenWords.length)]);
+      return;
+    }
+    if (!aiLabChosenWords.length) { setAiLabError("Dodaj reči sa prevodom ili izaberi drugu kategoriju."); return; }
+    if (mode === "chat") {
+      setAiLabChat([{ role: "assistant", content: `Let's practise English! Try to use these words: ${aiLabChosenWords.map(w => w.word).join(", ")}. What did you do today?` }]);
+      return;
+    }
+    setAiLabBusy(true);
+    try {
+      if (mode === "story") {
+        const text = await requestAiLearning(`Create an original short, coherent B1-B2 English story (120-180 words) naturally using these vocabulary entries: ${aiLabVocabulary}. Include the given English words naturally; do not force all if unnatural. Provide a full natural Serbian translation. Reply ONLY JSON: {"title":"English title","paragraphs":["English paragraph 1","English paragraph 2","English paragraph 3"],"serbian":"Complete Serbian translation","usedWords":["English word"]}. No markdown.`, 1100);
+        const data = parseAiLearningJson(text);
+        if (!Array.isArray(data.paragraphs) || !data.paragraphs.length) throw new Error("Priča nije pravilno generisana.");
+        setAiLabStory(data);
+      } else if (mode === "cloze") {
+        const text = await requestAiLearning(`Create exactly 5 B1-B2 English cloze exercises using these words/phrases: ${aiLabVocabulary}. Each exercise must have a complete grammatical English sentence containing one target word once. Return ONLY JSON {"exercises":[{"sentence":"Sentence with _____ replacing the missing target word or phrase","answer":"exact English missing word/phrase","translation":"Serbian translation of full sentence","hint":"short Serbian hint"}]}. All five should be meaningful and different. No markdown.`, 1000);
+        const data = parseAiLearningJson(text);
+        const exerciseList = (data.exercises || []).filter(x => x && typeof x.sentence === "string" && x.sentence.includes("_____") && typeof x.answer === "string" && x.answer.trim()).slice(0, 5);
+        if (!exerciseList.length) throw new Error("AI nije vratio ispravne zadatke.");
+        setAiLabExercises(exerciseList);
+      }
+    } catch (error) { setAiLabError(error.message || "Generisanje nije uspelo."); }
+    finally { setAiLabBusy(false); }
+  };
+  const sendAiLabChat = async () => {
+    const message = aiLabChatInput.trim();
+    if (!message || aiLabBusy) return;
+    const history = [...aiLabChat, { role: "user", content: message }];
+    setAiLabChat(history); setAiLabChatInput(""); setAiLabError(""); setAiLabBusy(true);
+    try {
+      const context = history.slice(-8).map(m => `${m.role === "user" ? "Learner" : "Tutor"}: ${m.content}`).join("\n");
+      const text = await requestAiLearning(`You are a supportive English B1-B2 conversation tutor. Chat with the learner in natural English, asking one brief follow-up question per turn. Encourage using these target words: ${aiLabVocabulary}. Gently correct an English error in one short sentence when relevant. Do not pretend to be the learner. Keep each response under 75 words. Conversation:\n${context}\nTutor:`, 200);
+      setAiLabChat(prev => [...prev, { role: "assistant", content: text.replace(/^Tutor:\s*/i, "") }]);
+    } catch (error) { setAiLabError(error.message || "AI razgovor nije dostupan."); }
+    finally { setAiLabBusy(false); }
+  };
+
   const startKnowledgeTest = (mode = testMode) => {
     const questions = buildKnowledgeQuestions(words, mode);
     setTestMode(mode);
@@ -977,6 +1061,10 @@ export default function VocabTracker() {
               style={{ border: "1px solid " + (view === "review" ? "var(--v-accent)" : "var(--v-border)"), background: view === "review" ? "var(--v-accent)" : "var(--v-panel)", color: view === "review" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: words.length ? 1 : 0.5 }}>
               ◎  Vežbanje
             </button>
+            <button onClick={() => { setView("aiLab"); setAiLabError(""); }}
+              style={{ border: "1px solid var(--v-border)", background: view === "aiLab" ? "var(--v-accent)" : "var(--v-panel)", color: view === "aiLab" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
+              ✨ AI Učenje
+            </button>
             <button onClick={() => startKnowledgeTest()} disabled={words.length === 0}
               style={{ border: "1px solid " + (view === "test" ? "var(--v-accent)" : "var(--v-border)"), background: view === "test" ? "var(--v-accent)" : "var(--v-panel)", color: view === "test" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: words.length ? 1 : .5 }}>
               ✎ &nbsp; Testovi
@@ -1132,6 +1220,98 @@ export default function VocabTracker() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* v8 AI Learning — additional optional practice. Does not change SRS. */}
+      {view === "aiLab" && (
+        <main className="v8-page">
+          <div className="v8-heading">
+            <div><div className="v8-eyebrow">AI LEARNING · V8</div><h2>Uči kroz priče, slušanje i razgovor</h2>
+              <p>Vežbe koriste reči iz tvog rečnika. AI može da pogreši — proveri neočekivane prevode. Ovi zadaci ne menjaju SRS raspored.</p></div>
+            <span className="v8-chip">{aiLabPool.length} dostupnih reči</span>
+          </div>
+          <div className="v8-modes">
+            {[["story","📖 Mini-priča","Tekst i prevod"],["cloze","✎ AI rečenice","Dopuni praznine"],["listen","🔊 Slušanje","Diktat reči"],["chat","💬 Razgovor","Engleski tutor"]].map(([mode,label,desc]) => (
+              <button key={mode} onClick={() => { setAiLabMode(mode); setAiLabError(""); setAiLabChecked(false); setAiLabAnswer(""); }} className={`v8-mode ${aiLabMode === mode ? "selected" : ""}`}>
+                <strong>{label}</strong><small>{desc}</small>
+              </button>
+            ))}
+          </div>
+          <div className="v8-controls">
+            <label>Kategorija <select value={aiLabSelectedTag} onChange={e=>setAiLabSelectedTag(e.target.value)}>
+              <option value="all">Sve reči</option>{aiLabTags.map(tag=><option key={tag} value={tag}>{tag}</option>)}
+            </select></label>
+            <label>Broj reči <select value={aiLabWordCount} onChange={e=>setAiLabWordCount(Number(e.target.value))}>
+              {[3,5,8,10].map(n=><option key={n} value={n}>{n}</option>)}
+            </select></label>
+            <button className="v8-primary" onClick={() => startAiLearning(aiLabMode)} disabled={aiLabBusy || !aiLabPool.length}>
+              {aiLabBusy ? "⟳ Generišem..." : aiLabMode === "story" ? "Generiši priču" : aiLabMode === "cloze" ? "Generiši zadatke" : aiLabMode === "listen" ? "Nova reč za diktat" : "Započni novi razgovor"}
+            </button>
+          </div>
+          {aiLabError && <div className="v8-error" role="alert">{aiLabError}</div>}
+          <div className="v8-focus">Reči za vežbu: {aiLabChosenWords.length ? aiLabChosenWords.map(w=>w.word).join(" · ") : "Nema reči za izabranu kategoriju"}</div>
+          {aiLabMode === "story" && (
+            <section className="v8-card">
+              {aiLabStory ? <>
+                <div className="v8-eyebrow">ORIGINALNA AI PRIČA</div><h3>{aiLabStory.title || "Your story"}</h3>
+                {(aiLabStory.paragraphs || []).map((paragraph,i)=><p key={i} className="v8-story"><ClickableSentence text={paragraph} /></p>)}
+                <button className="v8-secondary" onClick={()=>setAiLabShowTranslation(x=>!x)}>{aiLabShowTranslation?"Sakrij prevod":"Prikaži prevod na srpski"}</button>
+                {aiLabShowTranslation && <div className="v8-translation">{aiLabStory.serbian || "Prevod nije dostupan."}</div>}
+                <div className="v8-tip">Možeš da označiš nepoznatu reč u priči i dodaš je u rečnik koristeći postojeći meni.</div>
+              </> : <div className="v8-empty">Klikni „Generiši priču“ da dobiješ kratak engleski tekst sa rečima iz svog rečnika.</div>}
+            </section>
+          )}
+          {aiLabMode === "cloze" && (
+            <section className="v8-card">
+              {aiLabExercises.length ? (() => {
+                const ex=aiLabExercises[aiLabExerciseIndex];
+                if(!ex) return <div className="v8-empty">Zadaci su završeni! Generiši nove za još vežbanja.</div>;
+                const ok=normalizeTestAnswer(aiLabAnswer)===normalizeTestAnswer(ex.answer);
+                return <>
+                  <div className="v8-eyebrow">AI REČENICA · {aiLabExerciseIndex+1}/{aiLabExercises.length}</div>
+                  <h3 className="v8-question">{ex.sentence}</h3><p className="v8-tip">Pomoć: {ex.hint || "Popuni nedostajuću reč na engleskom."}</p>
+                  <form onSubmit={e=>{e.preventDefault();setAiLabChecked(true);}} className="v8-answer-row">
+                    <input value={aiLabAnswer} onChange={e=>setAiLabAnswer(e.target.value)} disabled={aiLabChecked} placeholder="Upiši englesku reč..." aria-label="Odgovor" />
+                    {!aiLabChecked && <button className="v8-primary" disabled={!aiLabAnswer.trim()}>Proveri</button>}
+                  </form>
+                  {aiLabChecked && <div className="v8-feedback"><strong>{ok?"✓ Tačno!":"Tačan odgovor: "+ex.answer}</strong><p>{ex.translation || ""}</p>
+                    <button className="v8-primary" onClick={()=>{setAiLabExerciseIndex(i=>i+1);setAiLabAnswer("");setAiLabChecked(false);}}>Sledeće pitanje →</button></div>}
+                </>;
+              })() : <div className="v8-empty">Klikni „Generiši zadatke“ za pet novih rečenica sa prazninama.</div>}
+            </section>
+          )}
+          {aiLabMode === "listen" && (
+            <section className="v8-card">
+              {aiLabListenWord ? <>
+                <div className="v8-eyebrow">SLUŠANJE / DIKTAT</div><h3>Poslušaj i napiši englesku reč</h3>
+                <button className="v8-listen" onClick={()=>speak(aiLabListenWord.word)}>🔊 Pusti izgovor</button>
+                <p className="v8-tip">Izgovor obezbeđuje tvoj browser. Može se razlikovati u zavisnosti od uređaja.</p>
+                <form onSubmit={e=>{e.preventDefault();setAiLabChecked(true);}} className="v8-answer-row">
+                  <input value={aiLabAnswer} onChange={e=>setAiLabAnswer(e.target.value)} disabled={aiLabChecked} placeholder="Šta si čuo?" aria-label="Diktat" />
+                  {!aiLabChecked && <button className="v8-primary" disabled={!aiLabAnswer.trim()}>Proveri</button>}
+                </form>
+                {aiLabChecked && <div className="v8-feedback"><strong>{normalizeTestAnswer(aiLabAnswer)===normalizeTestAnswer(aiLabListenWord.word)?"✓ Tačno!":"Tačan odgovor: "+aiLabListenWord.word}</strong>
+                  <p>{aiLabListenWord.wordSr || aiLabListenWord.translation}</p>
+                  <button className="v8-primary" onClick={()=>{setAiLabAnswer("");setAiLabChecked(false);const options=aiLabChosenWords.filter(w=>w.id!==aiLabListenWord.id);setAiLabListenWord(options[Math.floor(Math.random()*options.length)] || aiLabListenWord);}}>Sledeća reč →</button></div>}
+              </> : <div className="v8-empty">Klikni „Nova reč za diktat“, a zatim „Pusti izgovor“.</div>}
+            </section>
+          )}
+          {aiLabMode === "chat" && (
+            <section className="v8-card">
+              {aiLabChat.length ? <>
+                <div className="v8-eyebrow">AI RAZGOVOR · B1–B2</div>
+                <div className="v8-chat-log" aria-live="polite">
+                  {aiLabChat.map((m,i)=><div key={i} className={`v8-chat-bubble ${m.role === "user" ? "user" : "tutor"}`}><b>{m.role === "user" ? "Ti" : "AI tutor"}</b><p>{m.content}</p></div>)}
+                </div>
+                <form onSubmit={e=>{e.preventDefault();sendAiLabChat();}} className="v8-answer-row">
+                  <input value={aiLabChatInput} onChange={e=>setAiLabChatInput(e.target.value)} placeholder="Odgovori na engleskom..." disabled={aiLabBusy} aria-label="Poruka tutor-u" />
+                  <button className="v8-primary" disabled={aiLabBusy || !aiLabChatInput.trim()}>{aiLabBusy?"Pišem...":"Pošalji"}</button>
+                </form>
+                <div className="v8-tip">Razgovor se trenutno čuva samo u ovoj otvorenoj sesiji; nije trajno snimljen u Supabase.</div>
+              </> : <div className="v8-empty">Klikni „Započni novi razgovor“ i vežbaj svoje reči u kratkoj konverzaciji na engleskom.</div>}
+            </section>
+          )}
+        </main>
       )}
 
       {/* v6: local-only tests; never modify SRS or vocabulary */}
@@ -1485,6 +1665,23 @@ export default function VocabTracker() {
 @media(max-width:1150px){.v51-practice-grid{grid-template-columns:minmax(215px,.9fr) minmax(330px,1.5fr)}.v51-right{grid-column:1/-1}.v51-queue-row{display:inline-flex;width:calc(50% - 8px);vertical-align:top;margin-right:8px}.v51-goal-controls{margin-left:0}}
 @media(max-width:780px){.v51-practice-grid{grid-template-columns:1fr}.v51-right{grid-column:auto}.v51-mode{padding:12px 14px;font-size:14px}.v51-queue-row{display:flex;width:100%;margin-right:0}.v51-explanation{grid-template-columns:1fr}.v51-explanation>div:last-child{border:0;border-top:1px solid var(--v-border);padding:15px 0 0}.v51-left{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.v51-left .v51-pane-title,.v51-left .v51-progress-section,.v51-left .v51-next-date{grid-column:1/-1}.v51-stat{padding:8px;gap:6px}.v51-stat-icon{height:32px;width:32px;font-size:17px}.v51-stat small{font-size:11px}.v51-stat strong{font-size:22px}}
 @media(max-width:520px){.v51-left{grid-template-columns:1fr}.v51-modes{gap:14px}.v51-goal-controls{flex-wrap:wrap}.v51-top-progress{width:85px}.v51-flashcard{padding:17px 13px}.v51-card-mode{display:none}.v51-rating-grid{gap:5px}.v51-rating b{font-size:12px}.v51-rating small{font-size:10px}.v51-card-bottom button{padding:9px 8px;font-size:11px}.v51-dots{display:none}.v51-pane{padding:16px}}
+`}</style>
+      <style>{`
+.v8-page{max-width:1080px;margin:0 auto;padding:28px 24px 50px;color:var(--v-text)}
+.v8-heading{display:flex;justify-content:space-between;align-items:start;gap:20px;flex-wrap:wrap;margin-bottom:23px}
+.v8-heading h2{font-size:29px;margin:5px 0 9px}.v8-heading p{margin:0;color:var(--v-muted);font-size:14px;line-height:1.6;max-width:690px}
+.v8-eyebrow{font:700 11px monospace;letter-spacing:2px;color:var(--v-accentSoft)}.v8-chip{background:var(--v-elevated);border:1px solid var(--v-border);border-radius:40px;padding:10px 16px;color:var(--v-muted);font-size:13px}
+.v8-modes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+.v8-mode{border:1px solid var(--v-border);background:var(--v-panel);color:var(--v-text);border-radius:14px;padding:16px 13px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:7px;min-height:85px}
+.v8-mode.selected{border:2px solid var(--v-accent);background:var(--v-selectedBg)}.v8-mode strong{font-size:15px}.v8-mode small{font-size:12px;color:var(--v-muted)}
+.v8-controls{display:flex;flex-wrap:wrap;align-items:end;gap:13px;padding:16px;background:var(--v-panel);border:1px solid var(--v-border);border-radius:14px;margin-bottom:16px}
+.v8-controls label{display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--v-muted)}
+.v8-controls select,.v8-answer-row input{background:var(--v-input);color:var(--v-text);border:1px solid var(--v-border);border-radius:9px;padding:11px 13px;font-size:14px;min-height:42px;box-sizing:border-box}
+.v8-primary{background:var(--v-accent);color:var(--v-accentText);border:none;border-radius:10px;padding:12px 18px;font-size:13px;font-weight:700;cursor:pointer;min-height:42px}.v8-primary:disabled{opacity:.45;cursor:not-allowed}
+.v8-secondary{border:1px solid var(--v-accent);color:var(--v-accentSoft);background:var(--v-elevated);border-radius:10px;padding:11px 16px;cursor:pointer;font-size:13px;font-weight:700}
+.v8-focus{color:var(--v-muted);font-size:13px;line-height:1.5;margin:0 0 16px}.v8-card{padding:28px;border:1px solid var(--v-border);border-radius:18px;background:var(--v-panel);min-height:235px;box-shadow:0 9px 30px rgba(15,40,80,.05)}.v8-card h3{font-size:26px;margin:12px 0 18px}.v8-empty{color:var(--v-muted);text-align:center;padding:60px 12px;line-height:1.6}.v8-story{font-size:17px;line-height:1.9;margin:0 0 18px}.v8-translation,.v8-feedback{background:var(--v-elevated);border-radius:12px;padding:18px;margin-top:16px;white-space:pre-wrap;line-height:1.7;font-size:15px}.v8-feedback strong{color:var(--v-accentSoft)}.v8-feedback p{margin:7px 0 14px}.v8-tip{color:var(--v-muted);font-size:12px;line-height:1.7;margin:12px 0}.v8-question{font-size:23px!important;line-height:1.7}.v8-answer-row{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap;margin-top:18px}.v8-answer-row input{flex:1;min-width:200px}.v8-listen{background:var(--v-accent);color:var(--v-accentText);border:0;border-radius:28px;padding:15px 23px;cursor:pointer;font-size:16px}.v8-error{padding:12px 14px;border:1px solid var(--v-dangerBorder);background:var(--v-dangerBg);color:#d83f59;border-radius:11px;margin-bottom:14px}.v8-chat-log{max-height:460px;overflow:auto;display:flex;flex-direction:column;gap:12px;margin:12px 0}.v8-chat-bubble{border:1px solid var(--v-border);background:var(--v-card);padding:13px 17px;border-radius:13px;max-width:86%;line-height:1.65}.v8-chat-bubble.user{align-self:flex-end;background:var(--v-selectedBg)}.v8-chat-bubble b{font-size:12px;color:var(--v-accentSoft)}.v8-chat-bubble p{margin:7px 0 0;white-space:pre-wrap}
+@media(max-width:780px){.v8-modes{grid-template-columns:repeat(2,minmax(0,1fr))}.v8-page{padding:18px 12px 35px}.v8-card{padding:18px}.v8-heading h2{font-size:23px}}
+@media(max-width:420px){.v8-modes{grid-template-columns:1fr 1fr}.v8-mode{padding:11px}.v8-mode strong{font-size:12px}.v8-controls select{max-width:100%}}
 `}</style>
       <style>{`* { outline: none; } input, textarea { transition: border-color 0.2s; } input:focus, textarea:focus { border-color: var(--v-accent) !important; } input::placeholder, textarea::placeholder { color: var(--v-subtle); } select { color-scheme: inherit; } button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--v-accent) !important; outline-offset: 2px; } button { transition: filter .16s ease, background .16s ease; } button:hover { filter: brightness(1.04); } @media(max-width: 1050px) { .vocab-practice-grid { grid-template-columns: 1fr !important; } .vocab-practice-grid > aside:first-child { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; } .vocab-practice-grid > aside:first-child > .vocab-practice-stat { margin-bottom: 0 !important; } .vocab-practice-grid > aside:first-child > div:last-child { grid-column: 1 / -1; } } @media(max-width: 720px) { .vocab-practice-grid > aside:first-child { grid-template-columns: 1fr; } .vocab-practice-footer { justify-content: center !important; } .vocab-stat-grid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; } .vocab-hero-grid { grid-template-columns: 1fr !important; } .vocab-toolbar > input { flex-basis: 100% !important; } }`}</style>
     </div>
