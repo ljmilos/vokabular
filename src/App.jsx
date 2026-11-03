@@ -105,6 +105,22 @@ function highlightWord(sentence, word) {
   );
 }
 
+
+// Teme su na jednom mestu: nove teme se dodaju samo ovde.
+const VOCAB_THEMES = {
+  midnight: { name: "Midnight Pro", description: "Tamna indigo", colors: {
+    bg: "#0b1020", panel: "#151d32", card: "#1b2741", elevated: "#202d49", border: "#344361", text: "#edf2ff", muted: "#9aabc9", subtle: "#7283a5", accent: "#7775f7", accentText: "#ffffff", accentSoft: "#aeb7ff", header: "#171f38", input: "#111b2e", dangerBg: "#321b2a", dangerBorder: "#6a3146", knownBg: "#172f2c", learningBg: "#361e2e", newBg: "#1b2b46", selectedBg: "#35316c", statusInactive: "#8694b1", action: "var(--v-action)" } },
+  ocean: { name: "Deep Ocean", description: "Tamna tirkizna", colors: {
+    bg: "#061b25", panel: "#0c2935", card: "#103541", elevated: "#174450", border: "#285462", text: "#e9fcff", muted: "#99bec9", subtle: "#6a929f", accent: "#19b9b4", accentText: "#052528", accentSoft: "#6ce6de", header: "#0b2b39", input: "#0b252f", dangerBg: "#38212d", dangerBorder: "#7d4655", knownBg: "#153c36", learningBg: "#3c2735", newBg: "#15384b", selectedBg: "#19545d", statusInactive: "#96b8c4", action: "#c68529" } },
+  graphite: { name: "Graphite Gold", description: "Ugalj i zlato", colors: {
+    bg: "#111214", panel: "#1c1e20", card: "#242629", elevated: "#303235", border: "#414448", text: "#f3f0e9", muted: "#afada9", subtle: "var(--v-muted)a8b", accent: "#dba954", accentText: "#241a0b", accentSoft: "#edc989", header: "#1c1d20", input: "#1b1c1e", dangerBg: "#382427", dangerBorder: "#704247", knownBg: "#25392e", learningBg: "#3b292d", newBg: "#263440", selectedBg: "#4a3a29", statusInactive: "#aaa7a0", action: "#c58e35" } },
+  ivory: { name: "Ivory Paper", description: "Topla svetla", colors: {
+    bg: "#f7f5ef", panel: "#fffdf8", card: "#ffffff", elevated: "#f0eee7", border: "#dedbd2", text: "#262c36", muted: "#6b7481", subtle: "#9299a2", accent: "#4e64c8", accentText: "#ffffff", accentSoft: "#455cb5", header: "#fffdf8", input: "#ffffff", dangerBg: "#fff0f0", dangerBorder: "#edc9cc", knownBg: "#eff9f2", learningBg: "#fff0f2", newBg: "#f0f5fd", selectedBg: "#edf0ff", statusInactive: "#7b8490", action: "#cb8327" } },
+  arctic: { name: "Arctic Blue", description: "Moderna svetla", colors: {
+    bg: "#edf4fb", panel: "#ffffff", card: "#f8fbff", elevated: "#eaf2fc", border: "#cfdeec", text: "#172d45", muted: "#637c95", subtle: "#879bb0", accent: "#1678d4", accentText: "#ffffff", accentSoft: "#126ab7", header: "#ffffff", input: "#ffffff", dangerBg: "#fff0f3", dangerBorder: "#f1cbd2", knownBg: "#eaf9f4", learningBg: "#fff0f3", newBg: "#eaf4ff", selectedBg: "#e0efff", statusInactive: "#788fa8", action: "#d28a29" } }
+};
+const VOCAB_THEME_IDS = Object.keys(VOCAB_THEMES);
+
 export default function VocabTracker() {
   const [emailConfirmed, setEmailConfirmed] = useState(false);
   const [user, setUser] = useState(null);
@@ -128,6 +144,28 @@ export default function VocabTracker() {
   const [revealed, setRevealed] = useState(false);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [themeId, setThemeId] = useState(() => {
+    try {
+      const saved = localStorage.getItem("vocab_theme");
+      return VOCAB_THEME_IDS.includes(saved) ? saved : "ivory";
+    } catch { return "ivory"; }
+  });
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const theme = VOCAB_THEMES[themeId];
+  const chooseTheme = (id) => {
+    if (!VOCAB_THEMES[id]) return;
+    setThemeId(id);
+    setThemeMenuOpen(false);
+    try { localStorage.setItem("vocab_theme", id); } catch { /* bez memorije u privatnom modu */ }
+  };
+  // CSS varijable se postavljaju na <html>, zato tema važi i za login i modalne prikaze.
+  useEffect(() => {
+    const root = document.documentElement;
+    Object.entries(theme.colors).forEach(([name, value]) => root.style.setProperty(`--v-${name}`, value));
+    root.style.colorScheme = ["ivory", "arctic"].includes(themeId) ? "light" : "dark";
+    return () => { root.style.colorScheme = ""; };
+  }, [themeId]);
+
   const [sortOrder, setSortOrder] = useState(() => {
     const saved = localStorage.getItem("vocab_sort");
     return ["newest", "oldest", "az", "za"].includes(saved) ? saved : "newest";
@@ -260,9 +298,9 @@ export default function VocabTracker() {
   const reviewWords = words.filter(w => w.status === "learning");
   const currentReview = reviewWords[reviewIndex];
   const statusLabel = s => ({ new: "Novo", learning: "Učim", known: "Znam" }[s] || s);
-  const statusDot = s => ({ new: "#3b82f6", learning: "#f59e0b", known: "#22c55e" }[s] || "#999");
+  const statusDot = s => ({ new: "#3b82f6", learning: "#f59e0b", known: "#22c55e" }[s] || "var(--v-muted)");
   const counts = { all: words.length, new: words.filter(w => w.status === "new").length, learning: words.filter(w => w.status === "learning").length, known: words.filter(w => w.status === "known").length };
-  const inp = { width: "100%", background: "#12121a", border: "1px solid #2a2a3e", color: "#f0ebe3", padding: "11px 14px", borderRadius: 8, fontSize: 15, fontFamily: "Georgia, serif", boxSizing: "border-box" };
+  const inp = { width: "100%", background: "var(--v-input)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "11px 14px", borderRadius: 8, fontSize: 15, fontFamily: "Georgia, serif", boxSizing: "border-box" };
 
   const [popup, setPopup] = useState(null);
   const [quickAdding, setQuickAdding] = useState(false);
@@ -351,32 +389,32 @@ export default function VocabTracker() {
     const [editSr, setEditSr] = useState(s.sr || "");
     if (editing) {
       return (
-        <div style={{ background: "rgba(99,102,241,0.12)", borderLeft: "2px solid #6366f1", padding: "12px 14px", borderRadius: "0 8px 8px 0", marginBottom: 10 }}>
+        <div style={{ background: "rgba(99,102,241,0.12)", borderLeft: "2px solid var(--v-accent)", padding: "12px 14px", borderRadius: "0 8px 8px 0", marginBottom: 10 }}>
           <div style={{ marginBottom: 8 }}>
-            <div style={{ fontSize: 10, color: "#6366f1", letterSpacing: 2, marginBottom: 4, textTransform: "uppercase" }}>Engleski</div>
-            <textarea value={editEn} onChange={e => setEditEn(e.target.value)} rows={2} style={{ width: "100%", background: "#12121a", border: "1px solid #6366f1", color: "#f0ebe3", padding: "8px 10px", borderRadius: 6, fontSize: 13, fontFamily: "Georgia, serif", resize: "vertical", boxSizing: "border-box" }} />
+            <div style={{ fontSize: 10, color: "var(--v-accent)", letterSpacing: 2, marginBottom: 4, textTransform: "uppercase" }}>Engleski</div>
+            <textarea value={editEn} onChange={e => setEditEn(e.target.value)} rows={2} style={{ width: "100%", background: "var(--v-input)", border: "1px solid var(--v-accent)", color: "var(--v-text)", padding: "8px 10px", borderRadius: 6, fontSize: 13, fontFamily: "Georgia, serif", resize: "vertical", boxSizing: "border-box" }} />
           </div>
           <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 10, color: "#6366f1", letterSpacing: 2, marginBottom: 4, textTransform: "uppercase" }}>Srpski</div>
-            <textarea value={editSr} onChange={e => setEditSr(e.target.value)} rows={2} style={{ width: "100%", background: "#12121a", border: "1px solid #6366f1", color: "#f0ebe3", padding: "8px 10px", borderRadius: 6, fontSize: 13, fontFamily: "Georgia, serif", resize: "vertical", boxSizing: "border-box" }} />
+            <div style={{ fontSize: 10, color: "var(--v-accent)", letterSpacing: 2, marginBottom: 4, textTransform: "uppercase" }}>Srpski</div>
+            <textarea value={editSr} onChange={e => setEditSr(e.target.value)} rows={2} style={{ width: "100%", background: "var(--v-input)", border: "1px solid var(--v-accent)", color: "var(--v-text)", padding: "8px 10px", borderRadius: 6, fontSize: 13, fontFamily: "Georgia, serif", resize: "vertical", boxSizing: "border-box" }} />
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => { onUpdate(i, { en: editEn, sr: editSr }); setEditing(false); }} style={{ background: "#22c55e", border: "none", color: "#fff", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>✓ Sačuvaj</button>
-            <button onClick={() => setEditing(false)} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>✕ Odustani</button>
+            <button onClick={() => setEditing(false)} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>✕ Odustani</button>
           </div>
         </div>
       );
     }
     return (
-      <div style={{ background: "rgba(99,102,241,0.07)", borderLeft: "2px solid #6366f1", padding: "10px 14px", borderRadius: "0 8px 8px 0", marginBottom: 10 }}>
-        <div style={{ fontSize: 14, lineHeight: 1.65, color: "#d0cbc4", marginBottom: 4, display: "flex", alignItems: "flex-start", gap: 6 }}>
-          <span style={{ color: "#6366f1", fontFamily: "monospace", fontSize: 11, marginRight: 2, flexShrink: 0, marginTop: 2 }}>{i + 1}.</span>
+      <div style={{ background: "rgba(99,102,241,0.07)", borderLeft: "2px solid var(--v-accent)", padding: "10px 14px", borderRadius: "0 8px 8px 0", marginBottom: 10 }}>
+        <div style={{ fontSize: 14, lineHeight: 1.65, color: "var(--v-text)", marginBottom: 4, display: "flex", alignItems: "flex-start", gap: 6 }}>
+          <span style={{ color: "var(--v-accent)", fontFamily: "monospace", fontSize: 11, marginRight: 2, flexShrink: 0, marginTop: 2 }}>{i + 1}.</span>
           <span style={{ flex: 1 }}><ClickableSentence text={s.en || s} highlightTarget={word} /></span>
           <button onClick={() => speak(s.en || s)} title="Izgovori" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "0 2px", opacity: 0.5, flexShrink: 0 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.5}>🔊</button>
-          <button onClick={() => { setEditEn(s.en || s); setEditSr(s.sr || ""); setEditing(true); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, padding: "0 2px", opacity: 0.5, flexShrink: 0, color: "#a5b4fc" }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.5}>✎</button>
+          <button onClick={() => { setEditEn(s.en || s); setEditSr(s.sr || ""); setEditing(true); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, padding: "0 2px", opacity: 0.5, flexShrink: 0, color: "var(--v-accentSoft)" }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.5}>✎</button>
           <button onClick={() => onDelete(i)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, padding: "0 2px", opacity: 0.5, flexShrink: 0, color: "#ef4444" }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.5}>✕</button>
         </div>
-        {s.sr && <div style={{ fontSize: 12, color: "#888", fontStyle: "italic", paddingLeft: 20 }}>↳ {s.sr}</div>}
+        {s.sr && <div style={{ fontSize: 12, color: "var(--v-muted)", fontStyle: "italic", paddingLeft: 20 }}>↳ {s.sr}</div>}
       </div>
     );
   };
@@ -464,45 +502,45 @@ export default function VocabTracker() {
     setAuthLoading(false);
   };
 
-  if (loading) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", color: "#6366f1", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
-  if (dbError) return <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
+  if (loading) return <div style={{ minHeight: "100vh", background: "var(--v-bg)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--v-accent)", fontFamily: "monospace", letterSpacing: 3 }}>UČITAVANJE BAZE...</div>;
+  if (dbError) return <div style={{ minHeight: "100vh", background: "var(--v-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ background: "var(--v-dangerBg)", border: "1px solid var(--v-dangerBorder)", borderRadius: 16, padding: 32, color: "#ef4444", fontFamily: "monospace", maxWidth: 400, textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div><div>{dbError}</div></div></div>;
 
   if (emailConfirmed) return (
-    <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ background: "#1a1a2e", border: "1px solid #22c55e44", borderRadius: 20, padding: 48, width: "100%", maxWidth: 420, textAlign: "center" }}>
+    <div style={{ minHeight: "100vh", background: "var(--v-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ background: "var(--v-panel)", border: "1px solid #22c55e44", borderRadius: 20, padding: 48, width: "100%", maxWidth: 420, textAlign: "center" }}>
         <div style={{ fontSize: 64, marginBottom: 20 }}>✅</div>
-        <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 12, textTransform: "uppercase" }}>Vokabular Tracker</div>
-        <h2 style={{ margin: "0 0 12px", fontSize: 22, fontWeight: "normal", color: "#f0ebe3" }}>Email uspešno potvrđen!</h2>
-        <p style={{ color: "#888", fontSize: 14, lineHeight: 1.6, marginBottom: 32 }}>Tvoj nalog je aktiviran i spreman za korišćenje.<br />Možeš se sada prijaviti u sistem.</p>
-        <button onClick={() => setEmailConfirmed(false)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "14px 40px", borderRadius: 10, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1 }}>PRIJAVI SE →</button>
+        <div style={{ fontSize: 11, letterSpacing: 4, color: "var(--v-accent)", marginBottom: 12, textTransform: "uppercase" }}>Vokabular Tracker</div>
+        <h2 style={{ margin: "0 0 12px", fontSize: 22, fontWeight: "normal", color: "var(--v-text)" }}>Email uspešno potvrđen!</h2>
+        <p style={{ color: "var(--v-muted)", fontSize: 14, lineHeight: 1.6, marginBottom: 32 }}>Tvoj nalog je aktiviran i spreman za korišćenje.<br />Možeš se sada prijaviti u sistem.</p>
+        <button onClick={() => setEmailConfirmed(false)} style={{ background: "var(--v-accent)", border: "none", color: "var(--v-accentText)", padding: "14px 40px", borderRadius: 10, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1 }}>PRIJAVI SE →</button>
       </div>
     </div>
   );
 
   if (!user) return (
-    <div style={{ minHeight: "100vh", background: "#0f0f13", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 20, padding: 40, width: "100%", maxWidth: 400 }}>
-        <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 8, textTransform: "uppercase" }}>Vokabular Tracker</div>
+    <div style={{ minHeight: "100vh", background: "var(--v-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 20, padding: 40, width: "100%", maxWidth: 400 }}>
+        <div style={{ fontSize: 11, letterSpacing: 4, color: "var(--v-accent)", marginBottom: 8, textTransform: "uppercase" }}>Vokabular Tracker</div>
         <h1 style={{ margin: "0 0 32px", fontSize: 24, fontWeight: "normal" }}>{authView === "login" ? "Prijava" : "Registracija"}</h1>
-        {authError && <div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 8, padding: "10px 14px", color: "#ef4444", fontSize: 13, marginBottom: 16 }}>{authError}</div>}
+        {authError && <div style={{ background: "var(--v-dangerBg)", border: "1px solid var(--v-dangerBorder)", borderRadius: 8, padding: "10px 14px", color: "#ef4444", fontSize: 13, marginBottom: 16 }}>{authError}</div>}
         <div style={{ marginBottom: 16 }}>
-          <label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Email</label>
+          <label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 6, textTransform: "uppercase" }}>Email</label>
           <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAuth()} placeholder="vas@email.com"
-            style={{ width: "100%", background: "#12121a", border: "1px solid #2a2a3e", color: "#f0ebe3", padding: "11px 14px", borderRadius: 8, fontSize: 15, fontFamily: "Georgia, serif", boxSizing: "border-box" }} />
+            style={{ width: "100%", background: "var(--v-input)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "11px 14px", borderRadius: 8, fontSize: 15, fontFamily: "Georgia, serif", boxSizing: "border-box" }} />
         </div>
         <div style={{ marginBottom: 24 }}>
-          <label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Lozinka</label>
+          <label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 6, textTransform: "uppercase" }}>Lozinka</label>
           <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAuth()} placeholder="••••••••"
-            style={{ width: "100%", background: "#12121a", border: "1px solid #2a2a3e", color: "#f0ebe3", padding: "11px 14px", borderRadius: 8, fontSize: 15, fontFamily: "Georgia, serif", boxSizing: "border-box" }} />
+            style={{ width: "100%", background: "var(--v-input)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "11px 14px", borderRadius: 8, fontSize: 15, fontFamily: "Georgia, serif", boxSizing: "border-box" }} />
         </div>
         <button onClick={handleAuth} disabled={authLoading}
-          style={{ width: "100%", background: authLoading ? "#3a3a6e" : "#6366f1", border: "none", color: "#fff", padding: "14px", borderRadius: 10, cursor: authLoading ? "default" : "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1, marginBottom: 16 }}>
+          style={{ width: "100%", background: authLoading ? "var(--v-elevated)" : "var(--v-accent)", border: "none", color: "#fff", padding: "14px", borderRadius: 10, cursor: authLoading ? "default" : "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 1, marginBottom: 16 }}>
           {authLoading ? "ČEKAJ..." : authView === "login" ? "PRIJAVI SE" : "REGISTRUJ SE"}
         </button>
-        <div style={{ textAlign: "center", fontSize: 13, color: "#888" }}>
+        <div style={{ textAlign: "center", fontSize: 13, color: "var(--v-muted)" }}>
           {authView === "login" ? "Nemaš nalog?" : "Već imaš nalog?"}
           <button onClick={() => { setAuthView(authView === "login" ? "register" : "login"); setAuthError(null); }}
-            style={{ background: "none", border: "none", color: "#6366f1", cursor: "pointer", fontSize: 13, marginLeft: 6, textDecoration: "underline" }}>
+            style={{ background: "none", border: "none", color: "var(--v-accent)", cursor: "pointer", fontSize: 13, marginLeft: 6, textDecoration: "underline" }}>
             {authView === "login" ? "Registruj se" : "Prijavi se"}
           </button>
         </div>
@@ -511,37 +549,65 @@ export default function VocabTracker() {
   );
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0f0f13", fontFamily: "Georgia, serif", color: "#f0ebe3" }} onClick={() => setPopup(null)}>
+    <div style={{ minHeight: "100vh", background: "var(--v-bg)", fontFamily: "Georgia, serif", color: "var(--v-text)" }} onClick={() => { setPopup(null); setThemeMenuOpen(false); }}> 
       {popup && (
-        <div style={{ position: "fixed", left: Math.min(Math.max(popup.x - 80, 8), window.innerWidth - 200), top: Math.min(popup.y + 8, window.innerHeight - 80), zIndex: 9999, background: "#1a1a2e", border: "1px solid #6366f1", borderRadius: 12, padding: "10px 16px", boxShadow: "0 8px 32px rgba(0,0,0,0.7)", display: "flex", alignItems: "center", gap: 12, whiteSpace: "nowrap", maxWidth: "90vw" }}>
-          <span style={{ fontSize: 13, color: "#a5b4fc", fontStyle: "italic", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>"{popup.word}"</span>
-          <button onClick={() => handleQuickAdd(popup.word)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "monospace" }}>+ Dodaj</button>
-          <button onClick={() => setPopup(null)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 18, padding: "0 4px" }}>✕</button>
+        <div style={{ position: "fixed", left: Math.min(Math.max(popup.x - 80, 8), window.innerWidth - 200), top: Math.min(popup.y + 8, window.innerHeight - 80), zIndex: 9999, background: "var(--v-panel)", border: "1px solid var(--v-accent)", borderRadius: 12, padding: "10px 16px", boxShadow: "0 8px 32px rgba(0,0,0,0.7)", display: "flex", alignItems: "center", gap: 12, whiteSpace: "nowrap", maxWidth: "90vw" }}>
+          <span style={{ fontSize: 13, color: "var(--v-accentSoft)", fontStyle: "italic", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>"{popup.word}"</span>
+          <button onClick={() => handleQuickAdd(popup.word)} style={{ background: "var(--v-accent)", border: "none", color: "var(--v-accentText)", padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "monospace" }}>+ Dodaj</button>
+          <button onClick={() => setPopup(null)} style={{ background: "none", border: "none", color: "var(--v-muted)", cursor: "pointer", fontSize: 18, padding: "0 4px" }}>✕</button>
         </div>
       )}
 
       {quickAdding && (
-        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 9999, background: "#6366f1", color: "#fff", padding: "12px 20px", borderRadius: 10, fontFamily: "monospace", fontSize: 13, boxShadow: "0 4px 20px rgba(99,102,241,0.4)" }}>⟳ Dodajem u rečnik...</div>
+        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 9999, background: "var(--v-accent)", color: "#fff", padding: "12px 20px", borderRadius: 10, fontFamily: "monospace", fontSize: 13, boxShadow: "0 4px 20px rgba(99,102,241,0.4)" }}>⟳ Dodajem u rečnik...</div>
       )}
       {toast && <div style={{ position: "fixed", top: 20, right: 20, zIndex: 999, background: toast.color, color: "#fff", padding: "10px 20px", borderRadius: 8, fontFamily: "monospace", fontSize: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.5)" }}>{toast.msg}</div>}
 
       {/* HEADER */}
-      <div style={{ background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)", borderBottom: "1px solid #2a2a3e", padding: "24px 24px 20px" }}>
+      <div style={{ background: "var(--v-header)", borderBottom: "1px solid var(--v-border)", padding: "24px 24px 20px" }}>
         <div style={{ maxWidth: 760, margin: "0 auto", width: "100%" }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16 }}>
             <div>
-              <div style={{ fontSize: 11, letterSpacing: 4, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Vokabular Tracker</div>
+              <div style={{ fontSize: 11, letterSpacing: 4, color: "var(--v-accent)", marginBottom: 6, textTransform: "uppercase" }}>Vokabular Tracker</div>
               <h1 style={{ margin: 0, fontSize: 26, fontWeight: "normal", letterSpacing: -0.5 }}>Moje Engleske Reči</h1>
-              <div style={{ fontSize: 10, color: "#3a3a5e", fontFamily: "monospace", marginTop: 4 }}>● Supabase Cloud</div>
+              <div style={{ fontSize: 10, color: "var(--v-subtle)", fontFamily: "monospace", marginTop: 4 }}>● Supabase Cloud</div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-              <div style={{ fontSize: 11, color: "#555", fontFamily: "monospace" }}>{user.email}</div>
-              <button onClick={() => { supabaseAuth.signOut(token); localStorage.removeItem("sb_token"); setUser(null); setToken(null); setWords([]); }} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>odjavi se</button>
+              <div style={{ fontSize: 11, color: "var(--v-muted)", fontFamily: "monospace" }}>{user.email}</div>
+              <div style={{ position: "relative", zIndex: 30 }}>
+                <button type="button" onClick={e => { e.stopPropagation(); setThemeMenuOpen(v => !v); }}
+                  aria-label="Promeni temu" aria-expanded={themeMenuOpen} title="Izaberi temu"
+                  style={{ background: "var(--v-elevated)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "7px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>
+                  🎨 {theme.name} ▾
+                </button>
+                {themeMenuOpen && (
+                  <div onClick={e => e.stopPropagation()} style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", width: 245, maxWidth: "85vw", background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 12, padding: 8, boxShadow: "0 16px 40px rgba(0,0,0,0.22)", zIndex: 1000 }}>
+                    <div style={{ padding: "6px 8px 10px", color: "var(--v-muted)", fontFamily: "monospace", fontSize: 11 }}>IZABERI TEMU</div>
+                    {VOCAB_THEME_IDS.map(id => {
+                      const item = VOCAB_THEMES[id];
+                      return (
+                        <button key={id} type="button" onClick={() => chooseTheme(id)}
+                          style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", border: id === themeId ? "1px solid var(--v-accent)" : "1px solid transparent", borderRadius: 8, padding: "8px", marginBottom: 3, textAlign: "left", background: id === themeId ? "var(--v-elevated)" : "transparent", cursor: "pointer", color: "var(--v-text)" }}>
+                          <span style={{ display: "flex", gap: 2, padding: 4, border: `1px solid ${item.colors.border}`, background: item.colors.bg, borderRadius: 6 }}>
+                            {[item.colors.card, item.colors.accent, item.colors.text].map((color, i) => <span key={i} style={{ width: 10, height: 22, background: color, borderRadius: 3 }} />)}
+                          </span>
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            <span style={{ display: "block", fontSize: 12, fontWeight: 700 }}>{item.name}</span>
+                            <span style={{ display: "block", fontSize: 10, color: "var(--v-muted)", marginTop: 2 }}>{item.description}</span>
+                          </span>
+                          {id === themeId && <span style={{ color: "var(--v-accentSoft)" }}>✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <button onClick={() => { supabaseAuth.signOut(token); localStorage.removeItem("sb_token"); setUser(null); setToken(null); setWords([]); }} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>odjavi se</button>
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {["all", "new", "learning", "known"].map(s => (
-              <button key={s} onClick={() => setFilter(s)} style={{ background: filter === s ? "#6366f1" : "rgba(255,255,255,0.05)", border: "1px solid " + (filter === s ? "#6366f1" : "#2a2a3e"), color: filter === s ? "#fff" : "#888", padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>
+              <button key={s} onClick={() => setFilter(s)} style={{ background: filter === s ? "var(--v-accent)" : "rgba(255,255,255,0.05)", border: "1px solid " + (filter === s ? "var(--v-accent)" : "var(--v-border)"), color: filter === s ? "var(--v-accentText)" : "var(--v-muted)", padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>
                 {s === "all" ? "Sve" : statusLabel(s)} ({counts[s]})
               </button>
             ))}
@@ -553,55 +619,55 @@ export default function VocabTracker() {
       {view === "add" && (
         <div style={{ padding: 24, maxWidth: 760, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-            <button onClick={() => setView("list")} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
+            <button onClick={() => setView("list")} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: "normal" }}>Nova Reč</h2>
           </div>
           <div style={{ marginBottom: 20 }}>
-            <label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Upiši reč ili frazu (srpski ili engleski)</label>
+            <label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 6, textTransform: "uppercase" }}>Upiši reč ili frazu (srpski ili engleski)</label>
             <div style={{ display: "flex", gap: 8 }}>
               <input value={wordInput} onChange={e => handleWordInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && wordInput.trim().length >= 2) lookupWord(wordInput); }} placeholder="npr. equity, take for granted, prinos..." autoFocus style={{ ...inp, flex: 1, fontSize: 18, fontStyle: "italic", padding: "14px 16px" }} />
-              <button onClick={() => lookupWord(wordInput)} disabled={wordInput.trim().length < 2 || aiLoading} style={{ background: wordInput.trim().length >= 2 ? "#6366f1" : "#1a1a2e", border: "1px solid " + (wordInput.trim().length >= 2 ? "#6366f1" : "#2a2a3e"), color: wordInput.trim().length >= 2 ? "#fff" : "#444", padding: "0 20px", borderRadius: 8, cursor: wordInput.trim().length >= 2 ? "pointer" : "default", fontSize: 18, transition: "all 0.15s", flexShrink: 0 }}>{aiLoading ? "⟳" : "→"}</button>
+              <button onClick={() => lookupWord(wordInput)} disabled={wordInput.trim().length < 2 || aiLoading} style={{ background: wordInput.trim().length >= 2 ? "var(--v-accent)" : "var(--v-panel)", border: "1px solid " + (wordInput.trim().length >= 2 ? "var(--v-accent)" : "var(--v-border)"), color: wordInput.trim().length >= 2 ? "#fff" : "var(--v-subtle)", padding: "0 20px", borderRadius: 8, cursor: wordInput.trim().length >= 2 ? "pointer" : "default", fontSize: 18, transition: "all 0.15s", flexShrink: 0 }}>{aiLoading ? "⟳" : "→"}</button>
             </div>
           </div>
-          {aiLoading && <div style={{ background: "#1a1a2e", borderRadius: 12, padding: 24, border: "1px solid #2a2a3e", marginBottom: 20, textAlign: "center", color: "#6366f1", fontFamily: "monospace", fontSize: 13, letterSpacing: 2 }}>TRAŽIM...</div>}
-          {aiError && <div style={{ background: "#1a0a0a", border: "1px solid #3a1a1a", borderRadius: 12, padding: 16, marginBottom: 20, color: "#ef4444", fontSize: 13 }}>{aiError}</div>}
+          {aiLoading && <div style={{ background: "var(--v-panel)", borderRadius: 12, padding: 24, border: "1px solid var(--v-border)", marginBottom: 20, textAlign: "center", color: "var(--v-accent)", fontFamily: "monospace", fontSize: 13, letterSpacing: 2 }}>TRAŽIM...</div>}
+          {aiError && <div style={{ background: "var(--v-dangerBg)", border: "1px solid var(--v-dangerBorder)", borderRadius: 12, padding: 16, marginBottom: 20, color: "#ef4444", fontSize: 13 }}>{aiError}</div>}
           {aiData && !aiLoading && (
-            <div style={{ background: "#1a1a2e", borderRadius: 16, padding: 24, border: "1px solid #6366f1", marginBottom: 20 }}>
+            <div style={{ background: "var(--v-panel)", borderRadius: 16, padding: 24, border: "1px solid var(--v-accent)", marginBottom: 20 }}>
               <div style={{ marginBottom: 18 }}>
-                <div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Prevod</div>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 6, textTransform: "uppercase" }}>Prevod</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ fontSize: 22, color: "#f0ebe3" }}>{wordInput.trim().toLowerCase() === aiData.wordSr?.toLowerCase() ? aiData.wordEn : aiData.wordSr}</div>
+                  <div style={{ fontSize: 22, color: "var(--v-text)" }}>{wordInput.trim().toLowerCase() === aiData.wordSr?.toLowerCase() ? aiData.wordEn : aiData.wordSr}</div>
                   <button onClick={() => speak(aiData.wordEn || wordInput)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, padding: 4, lineHeight: 1, opacity: 0.7 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.7}>🔊</button>
                 </div>
-                {aiData.ipa && <div style={{ fontSize: 13, color: "#6366f1", fontFamily: "monospace", marginTop: 3, letterSpacing: 1 }}>{aiData.ipa}</div>}
-                {aiData.partOfSpeech && <div style={{ fontSize: 12, color: "#555", fontFamily: "monospace", marginTop: 4 }}>{aiData.partOfSpeech}</div>}
+                {aiData.ipa && <div style={{ fontSize: 13, color: "var(--v-accent)", fontFamily: "monospace", marginTop: 3, letterSpacing: 1 }}>{aiData.ipa}</div>}
+                {aiData.partOfSpeech && <div style={{ fontSize: 12, color: "var(--v-muted)", fontFamily: "monospace", marginTop: 4 }}>{aiData.partOfSpeech}</div>}
               </div>
               {aiData.synonyms?.length > 0 && (
                 <div style={{ marginBottom: 18 }}>
-                  <div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 8, textTransform: "uppercase" }}>Sinonimi</div>
+                  <div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 8, textTransform: "uppercase" }}>Sinonimi</div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {aiData.synonyms.map((syn, i) => (
-                      <span key={i} onClick={e => { e.stopPropagation(); const rect = e.target.getBoundingClientRect(); setPopup({ word: syn, x: rect.left + rect.width / 2, y: rect.bottom + 8 }); }} style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "#a5b4fc", padding: "4px 12px", borderRadius: 20, fontSize: 13, fontStyle: "italic", cursor: "pointer" }} onMouseEnter={e => { e.target.style.background = "rgba(99,102,241,0.3)"; e.target.style.borderColor = "#6366f1"; }} onMouseLeave={e => { e.target.style.background = "rgba(99,102,241,0.12)"; e.target.style.borderColor = "rgba(99,102,241,0.3)"; }}>{syn}</span>
+                      <span key={i} onClick={e => { e.stopPropagation(); const rect = e.target.getBoundingClientRect(); setPopup({ word: syn, x: rect.left + rect.width / 2, y: rect.bottom + 8 }); }} style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "var(--v-accentSoft)", padding: "4px 12px", borderRadius: 20, fontSize: 13, fontStyle: "italic", cursor: "pointer" }} onMouseEnter={e => { e.target.style.background = "rgba(99,102,241,0.3)"; e.target.style.borderColor = "var(--v-accent)"; }} onMouseLeave={e => { e.target.style.background = "rgba(99,102,241,0.12)"; e.target.style.borderColor = "rgba(99,102,241,0.3)"; }}>{syn}</span>
                     ))}
                   </div>
                 </div>
               )}
               <div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", textTransform: "uppercase" }}>Primeri</div>
-                  <button onClick={() => regenerateSentences(wordInput, (updater) => setAiData(prev => ({ ...prev, sentences: typeof updater === "function" ? updater(prev.sentences) : updater })), aiData.sentences)} disabled={regenLoading} style={{ background: "none", border: "1px solid #6366f1", color: regenLoading ? "#444" : "#a5b4fc", padding: "4px 10px", borderRadius: 6, cursor: regenLoading ? "default" : "pointer", fontSize: 11, fontFamily: "monospace" }}>{regenLoading ? "..." : "+ dodaj primer"}</button>
+                  <div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", textTransform: "uppercase" }}>Primeri</div>
+                  <button onClick={() => regenerateSentences(wordInput, (updater) => setAiData(prev => ({ ...prev, sentences: typeof updater === "function" ? updater(prev.sentences) : updater })), aiData.sentences)} disabled={regenLoading} style={{ background: "none", border: "1px solid var(--v-accent)", color: regenLoading ? "var(--v-subtle)" : "var(--v-accentSoft)", padding: "4px 10px", borderRadius: 6, cursor: regenLoading ? "default" : "pointer", fontSize: 11, fontFamily: "monospace" }}>{regenLoading ? "..." : "+ dodaj primer"}</button>
                 </div>
                 {aiData.sentences?.map((s, i) => <SentenceCard key={i} s={s} i={i} word={wordInput} onDelete={idx => setAiData(prev => ({ ...prev, sentences: prev.sentences.filter((_, j) => j !== idx) }))} onUpdate={(idx, updated) => setAiData(prev => ({ ...prev, sentences: prev.sentences.map((x, j) => j === idx ? updated : x) }))} />)}
               </div>
             </div>
           )}
-          {aiData && !aiLoading && <div style={{ marginBottom: 20 }}><label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Tvoje beleške (opcionalno)</label><textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="npr. viđeno u Bloomberg članku o ETF-ima..." rows={2} style={{ ...inp, resize: "vertical", fontFamily: "Georgia, serif" }} /></div>}
+          {aiData && !aiLoading && <div style={{ marginBottom: 20 }}><label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 6, textTransform: "uppercase" }}>Tvoje beleške (opcionalno)</label><textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="npr. viđeno u Bloomberg članku o ETF-ima..." rows={2} style={{ ...inp, resize: "vertical", fontFamily: "Georgia, serif" }} /></div>}
           {aiData && !aiLoading && <div style={{ height: 80 }} />}
         </div>
       )}
 
       {view === "add" && aiData && !aiLoading && (
-        <button onClick={addWord} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#d97706", border: "none", color: "#fff", padding: "14px 36px", borderRadius: 50, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 2, boxShadow: "0 4px 24px rgba(217,119,6,0.5)", zIndex: 100, whiteSpace: "nowrap" }}>
+        <button onClick={addWord} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "var(--v-action)", border: "none", color: "#fff", padding: "14px 36px", borderRadius: 50, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 2, boxShadow: "0 4px 24px rgba(217,119,6,0.5)", zIndex: 100, whiteSpace: "nowrap" }}>
           {saving ? "ČUVAM..." : "SAČUVAJ U BAZU →"}
         </button>
       )}
@@ -610,60 +676,60 @@ export default function VocabTracker() {
       {view === "detail" && selected && (
         <div style={{ padding: 24, maxWidth: 760, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
           <div style={{ display: "flex", gap: 12, marginBottom: 24 }}>
-            <button onClick={() => { setView("list"); setWordImage(null); }} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
+            <button onClick={() => { setView("list"); setWordImage(null); }} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
           </div>
-          <div style={{ background: selected.status === "known" ? "linear-gradient(160deg, #0d2e1a, #0f3d22)" : selected.status === "learning" ? "linear-gradient(160deg, #2a0812, #3d0f1a)" : "#1a1a2e", borderRadius: 16, padding: 28, border: "1px solid " + (selected.status === "known" ? "#22c55e44" : selected.status === "learning" ? "#e11d4844" : "#2a2a3e"), transition: "background 0.4s, border-color 0.4s" }}>
+          <div style={{ background: "var(--v-panel)", borderRadius: 16, padding: 28, border: "1px solid " + (selected.status === "known" ? "#22c55e44" : selected.status === "learning" ? "#e11d4844" : "var(--v-border)"), transition: "background 0.4s, border-color 0.4s" }}>
             <div style={{ marginBottom: 20 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0, fontSize: 28, fontWeight: "normal", fontStyle: "italic", wordBreak: "break-word" }}>{selected.word}</h2>
-                {selected.ipa && <span style={{ fontSize: 13, color: "#6366f1", fontFamily: "monospace", letterSpacing: 1 }}>{selected.ipa}</span>}
+                {selected.ipa && <span style={{ fontSize: 13, color: "var(--v-accent)", fontFamily: "monospace", letterSpacing: 1 }}>{selected.ipa}</span>}
                 <button onClick={() => speak(selected.word)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, padding: 4, lineHeight: 1, opacity: 0.7 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.7}>🔊</button>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 {[["★","new","#3b82f6","Novo"],["?","learning","#e11d48","Učim"],["✓","known","#22c55e","Znam"]].map(([label, s, color, tip]) => (
                   <div key={s} style={{ position: "relative" }}>
                     <button onClick={() => { updateStatus(selected.id, s); setSelected(prev => ({ ...prev, status: s })); showToast("Status ažuriran"); }} style={{ background: selected.status === s ? color : "transparent", border: "1px solid " + (selected.status === s ? color : "rgba(255,255,255,0.2)"), color: selected.status === s ? "#fff" : "rgba(255,255,255,0.25)", width: 32, height: 32, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>{label}</button>
-                    <div className="tip" style={{ position: "absolute", bottom: 38, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#fff", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>{tip}</div>
+                    <div className="tip" style={{ position: "absolute", bottom: 38, left: "50%", transform: "translateX(-50%)", background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>{tip}</div>
                   </div>
                 ))}
                 <div style={{ position: "relative" }}>
-                  <button onClick={() => deleteWord(selected.id)} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.3)", width: 32, height: 32, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.15)"; e.currentTarget.style.color = "#fff"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.3)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>✕</button>
-                  <div className="tip" style={{ position: "absolute", bottom: 38, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#fff", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>Briši</div>
+                  <button onClick={() => deleteWord(selected.id)} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "var(--v-statusInactive)", width: 32, height: 32, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.15)"; e.currentTarget.style.color = "var(--v-text)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--v-statusInactive)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>✕</button>
+                  <div className="tip" style={{ position: "absolute", bottom: 38, left: "50%", transform: "translateX(-50%)", background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>Briši</div>
                 </div>
                 <span style={{ marginLeft: "auto", background: "rgba(99,102,241,0.15)", color: selected.status === "new" ? "#3b82f6" : selected.status === "learning" ? "#e11d48" : "#22c55e", padding: "4px 12px", borderRadius: 20, fontSize: 11, fontFamily: "monospace" }}>{selected.status === "new" ? "Novo" : selected.status === "learning" ? "Učim" : "Znam"}</span>
               </div>
             </div>
-            {imageLoading && <div style={{ height: 160, background: "rgba(255,255,255,0.03)", borderRadius: 10, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", color: "#444", fontFamily: "monospace", fontSize: 12 }}>učitavam sliku...</div>}
+            {imageLoading && <div style={{ height: 160, background: "rgba(255,255,255,0.03)", borderRadius: 10, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--v-subtle)", fontFamily: "monospace", fontSize: 12 }}>učitavam sliku...</div>}
             {wordImage && !imageLoading && (
               <div style={{ marginBottom: 16, borderRadius: 10, overflow: "hidden", position: "relative" }}>
                 <img src={wordImage.url} alt={selected.word} onError={e => { e.target.parentNode.style.display = "none"; }} style={{ width: "100%", height: 180, objectFit: "cover", display: "block" }} />
-                {wordImage.author && <a href={`${wordImage.authorUrl}?utm_source=vokabular_tracker&utm_medium=referral`} target="_blank" rel="noreferrer" style={{ position: "absolute", bottom: 6, right: 8, fontSize: 10, color: "rgba(255,255,255,0.6)", textDecoration: "none", background: "rgba(0,0,0,0.4)", padding: "2px 6px", borderRadius: 4 }}>Photo by {wordImage.author} on Unsplash</a>}
+                {wordImage.author && <a href={`${wordImage.authorUrl}?utm_source=vokabular_tracker&utm_medium=referral`} target="_blank" rel="noreferrer" style={{ position: "absolute", bottom: 6, right: 8, fontSize: 10, color: "var(--v-muted)", textDecoration: "none", background: "rgba(0,0,0,0.4)", padding: "2px 6px", borderRadius: 4 }}>Photo by {wordImage.author} on Unsplash</a>}
               </div>
             )}
             {selected.translation && (
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 6, textTransform: "uppercase" }}>Prevod</div>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 6, textTransform: "uppercase" }}>Prevod</div>
                 {editingTranslation ? (
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <input value={editTranslationVal} onChange={e => setEditTranslationVal(e.target.value)} autoFocus style={{ flex: 1, background: "#12121a", border: "1px solid #6366f1", color: "#f0ebe3", padding: "8px 12px", borderRadius: 8, fontSize: 18, fontFamily: "Georgia, serif" }} />
+                    <input value={editTranslationVal} onChange={e => setEditTranslationVal(e.target.value)} autoFocus style={{ flex: 1, background: "var(--v-input)", border: "1px solid var(--v-accent)", color: "var(--v-text)", padding: "8px 12px", borderRadius: 8, fontSize: 18, fontFamily: "Georgia, serif" }} />
                     <button onClick={async () => { await db.updateTranslation(selected.id, editTranslationVal, token); setWords(prev => prev.map(w => w.id === selected.id ? { ...w, wordSr: editTranslationVal, translation: editTranslationVal } : w)); setSelected(prev => ({ ...prev, wordSr: editTranslationVal, translation: editTranslationVal })); setEditingTranslation(false); showToast("Prevod ažuriran ✓"); }} style={{ background: "#22c55e", border: "none", color: "#fff", padding: "8px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>✓</button>
-                    <button onClick={() => setEditingTranslation(false)} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12 }}>✕</button>
+                    <button onClick={() => setEditingTranslation(false)} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12 }}>✕</button>
                   </div>
                 ) : (
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <div style={{ fontSize: 20, color: "#c9c0b4" }}>{selected.wordSr || selected.translation}</div>
-                    <button onClick={() => { setEditTranslationVal(selected.wordSr || selected.translation); setEditingTranslation(true); }} style={{ background: "none", border: "1px solid #2a2a3e", color: "#555", padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>✎ edit</button>
+                    <button onClick={() => { setEditTranslationVal(selected.wordSr || selected.translation); setEditingTranslation(true); }} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "3px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>✎ edit</button>
                   </div>
                 )}
-                {selected.partOfSpeech && <div style={{ fontSize: 11, color: "#555", fontFamily: "monospace", marginTop: 4 }}>{selected.partOfSpeech}</div>}
+                {selected.partOfSpeech && <div style={{ fontSize: 11, color: "var(--v-muted)", fontFamily: "monospace", marginTop: 4 }}>{selected.partOfSpeech}</div>}
               </div>
             )}
             {selected.synonyms?.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 8, textTransform: "uppercase" }}>Sinonimi</div>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 8, textTransform: "uppercase" }}>Sinonimi</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {selected.synonyms.map((syn, i) => (
-                    <span key={i} onClick={e => { e.stopPropagation(); const rect = e.target.getBoundingClientRect(); setPopup({ word: syn, x: rect.left + rect.width / 2, y: rect.bottom + 8 }); }} style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "#a5b4fc", padding: "4px 12px", borderRadius: 20, fontSize: 13, fontStyle: "italic", cursor: "pointer" }} onMouseEnter={e => { e.target.style.background = "rgba(99,102,241,0.3)"; e.target.style.borderColor = "#6366f1"; }} onMouseLeave={e => { e.target.style.background = "rgba(99,102,241,0.12)"; e.target.style.borderColor = "rgba(99,102,241,0.3)"; }}>{syn}</span>
+                    <span key={i} onClick={e => { e.stopPropagation(); const rect = e.target.getBoundingClientRect(); setPopup({ word: syn, x: rect.left + rect.width / 2, y: rect.bottom + 8 }); }} style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", color: "var(--v-accentSoft)", padding: "4px 12px", borderRadius: 20, fontSize: 13, fontStyle: "italic", cursor: "pointer" }} onMouseEnter={e => { e.target.style.background = "rgba(99,102,241,0.3)"; e.target.style.borderColor = "var(--v-accent)"; }} onMouseLeave={e => { e.target.style.background = "rgba(99,102,241,0.12)"; e.target.style.borderColor = "rgba(99,102,241,0.3)"; }}>{syn}</span>
                   ))}
                 </div>
               </div>
@@ -671,14 +737,14 @@ export default function VocabTracker() {
             {selected.sentences?.length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                  <div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", textTransform: "uppercase" }}>Primeri</div>
-                  <button onClick={() => regenerateSentences(selected.word, (updater) => { const newList = typeof updater === "function" ? updater(selected.sentences) : updater; setWords(prev => prev.map(w => w.id === selected.id ? { ...w, sentences: newList } : w)); setSelected(prev => ({ ...prev, sentences: newList })); }, selected.sentences)} disabled={regenLoading} style={{ background: "none", border: "1px solid #6366f1", color: regenLoading ? "#444" : "#a5b4fc", padding: "4px 10px", borderRadius: 6, cursor: regenLoading ? "default" : "pointer", fontSize: 11, fontFamily: "monospace" }}>{regenLoading ? "..." : "+ dodaj primer"}</button>
+                  <div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", textTransform: "uppercase" }}>Primeri</div>
+                  <button onClick={() => regenerateSentences(selected.word, (updater) => { const newList = typeof updater === "function" ? updater(selected.sentences) : updater; setWords(prev => prev.map(w => w.id === selected.id ? { ...w, sentences: newList } : w)); setSelected(prev => ({ ...prev, sentences: newList })); }, selected.sentences)} disabled={regenLoading} style={{ background: "none", border: "1px solid var(--v-accent)", color: regenLoading ? "var(--v-subtle)" : "var(--v-accentSoft)", padding: "4px 10px", borderRadius: 6, cursor: regenLoading ? "default" : "pointer", fontSize: 11, fontFamily: "monospace" }}>{regenLoading ? "..." : "+ dodaj primer"}</button>
                 </div>
                 {selected.sentences.map((s, i) => <SentenceCard key={i} s={s} i={i} word={selected.word} onDelete={idx => { const updated = selected.sentences.filter((_, j) => j !== idx); setWords(prev => prev.map(w => w.id === selected.id ? { ...w, sentences: updated } : w)); setSelected(prev => ({ ...prev, sentences: updated })); }} onUpdate={(idx, updatedS) => { const updated = selected.sentences.map((x, j) => j === idx ? updatedS : x); setWords(prev => prev.map(w => w.id === selected.id ? { ...w, sentences: updated } : w)); setSelected(prev => ({ ...prev, sentences: updated })); }} />)}
               </div>
             )}
-            {selected.notes && <div style={{ marginBottom: 16 }}><div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 4, textTransform: "uppercase" }}>Beleške</div><div style={{ fontSize: 13, color: "#888" }}>{selected.notes}</div></div>}
-            <div style={{ fontSize: 11, color: "#444", fontFamily: "monospace" }}>
+            {selected.notes && <div style={{ marginBottom: 16 }}><div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 4, textTransform: "uppercase" }}>Beleške</div><div style={{ fontSize: 13, color: "var(--v-muted)" }}>{selected.notes}</div></div>}
+            <div style={{ fontSize: 11, color: "var(--v-subtle)", fontFamily: "monospace" }}>
               Dodano: {formatDate(selected.addedAt)} · Ponovljeno: {selected.reviewCount}x
               {selected.learnedAt && <span style={{ color: "#22c55e" }}> · Naučeno: {formatDate(selected.learnedAt)}</span>}
             </div>
@@ -690,33 +756,33 @@ export default function VocabTracker() {
       {view === "review" && (
         <div style={{ padding: 24, maxWidth: 540, margin: "0 auto" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-            <button onClick={() => { setView("list"); setReviewIndex(0); setRevealed(false); }} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
-            <span style={{ fontSize: 13, color: "#888", fontFamily: "monospace" }}>{reviewIndex + 1} / {reviewWords.length}</span>
+            <button onClick={() => { setView("list"); setReviewIndex(0); setRevealed(false); }} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>← Nazad</button>
+            <span style={{ fontSize: 13, color: "var(--v-muted)", fontFamily: "monospace" }}>{reviewIndex + 1} / {reviewWords.length}</span>
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => { setReviewIndex(i => (i - 1 + reviewWords.length) % reviewWords.length); setRevealed(false); }} style={{ background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#888", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 16 }}>←</button>
-              <button onClick={() => { setReviewIndex(i => (i + 1) % reviewWords.length); setRevealed(false); }} style={{ background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#888", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 16 }}>→</button>
+              <button onClick={() => { setReviewIndex(i => (i - 1 + reviewWords.length) % reviewWords.length); setRevealed(false); }} style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 16 }}>←</button>
+              <button onClick={() => { setReviewIndex(i => (i + 1) % reviewWords.length); setRevealed(false); }} style={{ background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 16 }}>→</button>
             </div>
           </div>
           {reviewWords.length === 0 ? (
-            <div style={{ textAlign: "center", color: "#888", padding: 60, fontSize: 18 }}>Nema reči označenih kao "Učim" 📖</div>
+            <div style={{ textAlign: "center", color: "var(--v-muted)", padding: 60, fontSize: 18 }}>Nema reči označenih kao "Učim" 📖</div>
           ) : currentReview && (
-            <div style={{ background: "#1a1a2e", borderRadius: 20, padding: 36, border: "2px solid #f59e0b", textAlign: "center", display: "flex", flexDirection: "column", gap: 20 }}>
+            <div style={{ background: "var(--v-panel)", borderRadius: 20, padding: 36, border: "2px solid #f59e0b", textAlign: "center", display: "flex", flexDirection: "column", gap: 20 }}>
               <div>
                 <div style={{ fontSize: 11, color: "#f59e0b", fontFamily: "monospace", letterSpacing: 2, marginBottom: 8 }}>KARTICA {reviewIndex + 1} OD {reviewWords.length}</div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
                   <div style={{ fontSize: 38, fontStyle: "italic", fontWeight: 700 }}>{currentReview.word}</div>
                   <button onClick={() => speak(currentReview.word)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 22, padding: 4, opacity: 0.7 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.7}>🔊</button>
                 </div>
-                {currentReview.wordSr && <div style={{ fontSize: 16, color: "#888", marginBottom: 4 }}>{currentReview.wordSr}</div>}
-                {currentReview.partOfSpeech && <div style={{ fontSize: 11, color: "#555", fontFamily: "monospace" }}>{currentReview.partOfSpeech}</div>}
+                {currentReview.wordSr && <div style={{ fontSize: 16, color: "var(--v-muted)", marginBottom: 4 }}>{currentReview.wordSr}</div>}
+                {currentReview.partOfSpeech && <div style={{ fontSize: 11, color: "var(--v-muted)", fontFamily: "monospace" }}>{currentReview.partOfSpeech}</div>}
               </div>
               {!revealed ? (
-                <button onClick={() => setRevealed(true)} style={{ background: "#6366f1", border: "none", color: "#fff", padding: "14px 32px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontFamily: "monospace", letterSpacing: 1 }}>POKAŽI PRIMER</button>
+                <button onClick={() => setRevealed(true)} style={{ background: "var(--v-accent)", border: "none", color: "var(--v-accentText)", padding: "14px 32px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontFamily: "monospace", letterSpacing: 1 }}>POKAŽI PRIMER</button>
               ) : (
                 <div>
                   {currentReview.sentences?.[0] && (
                     <div style={{ fontSize: 13, padding: "12px 16px", background: "rgba(99,102,241,0.08)", borderRadius: 8, marginBottom: 16, textAlign: "left" }}>
-                      <div style={{ color: "#d0cbc4", fontStyle: "italic", lineHeight: 1.6, marginBottom: 4 }}>{highlightWord(currentReview.sentences[0].en || currentReview.sentences[0], currentReview.word)}</div>
+                      <div style={{ color: "var(--v-text)", fontStyle: "italic", lineHeight: 1.6, marginBottom: 4 }}>{highlightWord(currentReview.sentences[0].en || currentReview.sentences[0], currentReview.word)}</div>
                       {currentReview.sentences[0].sr && <div style={{ color: "#666", fontSize: 12, fontStyle: "italic" }}>↳ {currentReview.sentences[0].sr}</div>}
                     </div>
                   )}
@@ -727,7 +793,7 @@ export default function VocabTracker() {
                 </div>
               )}
               <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
-                {reviewWords.map((_, i) => (<div key={i} onClick={() => { setReviewIndex(i); setRevealed(false); }} style={{ width: 8, height: 8, borderRadius: "50%", background: i === reviewIndex ? "#f59e0b" : "#2a2a3e", cursor: "pointer", transition: "background 0.2s" }} />))}
+                {reviewWords.map((_, i) => (<div key={i} onClick={() => { setReviewIndex(i); setRevealed(false); }} style={{ width: 8, height: 8, borderRadius: "50%", background: i === reviewIndex ? "#f59e0b" : "var(--v-border)", cursor: "pointer", transition: "background 0.2s" }} />))}
               </div>
             </div>
           )}
@@ -739,7 +805,7 @@ export default function VocabTracker() {
         <div style={{ padding: 24, paddingBottom: 90, maxWidth: 760, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
           {/* Actions bar */}
           <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pretraži..." style={{ flex: 1, minWidth: 120, background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#f0ebe3", padding: "10px 14px", borderRadius: 8, fontSize: 14, fontFamily: "Georgia, serif" }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pretraži..." style={{ flex: 1, minWidth: 120, background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "10px 14px", borderRadius: 8, fontSize: 14, fontFamily: "Georgia, serif" }} />
             <select
               value={sortOrder}
               onChange={e => {
@@ -748,53 +814,53 @@ export default function VocabTracker() {
               }}
               aria-label="Sortiraj reči"
               title="Sortiraj reči"
-              style={{ background: "#1a1a2e", border: "1px solid #6366f1", color: "#a5b4fc", padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", maxWidth: "100%" }}
+              style={{ background: "var(--v-panel)", border: "1px solid var(--v-accent)", color: "var(--v-accentSoft)", padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", maxWidth: "100%" }}
             >
               <option value="newest">↓ Najnovije</option>
               <option value="oldest">↑ Najstarije</option>
               <option value="az">A–Z</option>
               <option value="za">Z–A</option>
             </select>
-            {filteredWords.length > 0 && <button onClick={exportPDF} style={{ background: "rgba(99,102,241,0.15)", border: "1px solid #6366f1", color: "#a5b4fc", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>↓ PDF</button>}
-            <button onClick={() => { setCombineMode(!combineMode); setSelectedIds([]); setCombineResult(null); }} style={{ background: combineMode ? "#6366f1" : "rgba(99,102,241,0.15)", border: "1px solid #6366f1", color: combineMode ? "#fff" : "#a5b4fc", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>⊕ Kombiniraj</button>
+            {filteredWords.length > 0 && <button onClick={exportPDF} style={{ background: "rgba(99,102,241,0.15)", border: "1px solid var(--v-accent)", color: "var(--v-accentSoft)", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>↓ PDF</button>}
+            <button onClick={() => { setCombineMode(!combineMode); setSelectedIds([]); setCombineResult(null); }} style={{ background: combineMode ? "var(--v-accent)" : "rgba(99,102,241,0.15)", border: "1px solid var(--v-accent)", color: combineMode ? "#fff" : "var(--v-accentSoft)", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>⊕ Kombiniraj</button>
             {reviewWords.length > 0 && <button onClick={() => { setView("review"); setReviewIndex(0); setRevealed(false); }} style={{ background: "#f59e0b", border: "none", color: "#fff", padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: "monospace", whiteSpace: "nowrap" }}>🔁 Ponavljaj ({reviewWords.length})</button>}
             {/* VIEW SWITCHER */}
-            <div style={{ display: "flex", background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ display: "flex", background: "var(--v-panel)", border: "1px solid var(--v-border)", borderRadius: 8, overflow: "hidden" }}>
               <button onClick={() => setLayoutView("list")} title="Lista"
-                style={{ background: layoutView === "list" ? "#2a2a4e" : "transparent", border: "none", color: layoutView === "list" ? "#a5b4fc" : "#555", padding: "10px 13px", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>☰</button>
+                style={{ background: layoutView === "list" ? "var(--v-elevated)" : "transparent", border: "none", color: layoutView === "list" ? "var(--v-accentSoft)" : "var(--v-muted)", padding: "10px 13px", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>☰</button>
               <button onClick={() => setLayoutView("board")} title="Board"
-                style={{ background: layoutView === "board" ? "#2a2a4e" : "transparent", border: "none", color: layoutView === "board" ? "#a5b4fc" : "#555", padding: "10px 13px", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>⊞</button>
+                style={{ background: layoutView === "board" ? "var(--v-elevated)" : "transparent", border: "none", color: layoutView === "board" ? "var(--v-accentSoft)" : "var(--v-muted)", padding: "10px 13px", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>⊞</button>
             </div>
           </div>
 
           {/* Combine result */}
           {combineResult && (
-            <div style={{ background: "#1a1a2e", border: "1px solid #6366f1", borderRadius: 12, padding: 20, marginBottom: 20 }}>
-              <div style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", marginBottom: 12, textTransform: "uppercase", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ background: "var(--v-panel)", border: "1px solid var(--v-accent)", borderRadius: 12, padding: 20, marginBottom: 20 }}>
+              <div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 12, textTransform: "uppercase", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 Kombinovani primeri — {combineResult.words.map(w => <span key={w} style={{ background: "rgba(99,102,241,0.2)", padding: "2px 8px", borderRadius: 10, fontStyle: "italic", textTransform: "none", letterSpacing: 0 }}>{w}</span>)}
               </div>
               {combineResult.sentences.map((s, i) => (
-                <div key={i} style={{ background: "rgba(99,102,241,0.07)", borderLeft: "2px solid #6366f1", padding: "10px 14px", borderRadius: "0 8px 8px 0", marginBottom: 8 }}>
-                  <div style={{ fontSize: 14, color: "#d0cbc4", lineHeight: 1.6, marginBottom: 3, display: "flex", alignItems: "flex-start", gap: 6 }}>
+                <div key={i} style={{ background: "rgba(99,102,241,0.07)", borderLeft: "2px solid var(--v-accent)", padding: "10px 14px", borderRadius: "0 8px 8px 0", marginBottom: 8 }}>
+                  <div style={{ fontSize: 14, color: "var(--v-text)", lineHeight: 1.6, marginBottom: 3, display: "flex", alignItems: "flex-start", gap: 6 }}>
                     <span style={{ flex: 1 }}>{(() => { let parts = [s.en]; combineResult.words.forEach(word => { parts = parts.flatMap(part => { if (typeof part !== "string") return [part]; const split = part.split(new RegExp(`(${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi")); return split.map((p, j) => p.toLowerCase() === word.toLowerCase() ? <strong key={word+j} style={{ color: "#fff", fontWeight: 700 }}>{p}</strong> : p); }); }); return parts; })()}</span>
                     <button onClick={() => speak(s.en)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, opacity: 0.5, flexShrink: 0 }} onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.5}>🔊</button>
                   </div>
-                  {s.sr && <div style={{ fontSize: 12, color: "#888", fontStyle: "italic", marginBottom: 8 }}>↳ {s.sr}</div>}
+                  {s.sr && <div style={{ fontSize: 12, color: "var(--v-muted)", fontStyle: "italic", marginBottom: 8 }}>↳ {s.sr}</div>}
                   {savingTo?.sentenceIndex === i ? (
-                    <div style={{ background: "#12121a", border: "1px solid #2a2a3e", borderRadius: 8, padding: "10px 12px", marginTop: 6 }}>
-                      <div style={{ fontSize: 10, letterSpacing: 2, color: "#6366f1", marginBottom: 8, textTransform: "uppercase" }}>Dodaj primer za:</div>
-                      {combineResult.words.map(word => { const wordObj = words.find(w => w.word === word); const checked = savingTo.selectedWordIds.includes(wordObj?.id); return wordObj ? (<div key={word} onClick={() => setSavingTo(prev => ({ ...prev, selectedWordIds: checked ? prev.selectedWordIds.filter(id => id !== wordObj.id) : [...prev.selectedWordIds, wordObj.id] }))} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", cursor: "pointer" }}><div style={{ width: 16, height: 16, borderRadius: 3, border: "2px solid " + (checked ? "#6366f1" : "rgba(255,255,255,0.3)"), background: checked ? "#6366f1" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff", flexShrink: 0 }}>{checked ? "✓" : ""}</div><span style={{ fontSize: 13, fontStyle: "italic", color: "#d0cbc4" }}>{word}</span><span style={{ fontSize: 11, color: "#555" }}>{wordObj.translation}</span></div>) : null; })}
+                    <div style={{ background: "var(--v-input)", border: "1px solid var(--v-border)", borderRadius: 8, padding: "10px 12px", marginTop: 6 }}>
+                      <div style={{ fontSize: 10, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 8, textTransform: "uppercase" }}>Dodaj primer za:</div>
+                      {combineResult.words.map(word => { const wordObj = words.find(w => w.word === word); const checked = savingTo.selectedWordIds.includes(wordObj?.id); return wordObj ? (<div key={word} onClick={() => setSavingTo(prev => ({ ...prev, selectedWordIds: checked ? prev.selectedWordIds.filter(id => id !== wordObj.id) : [...prev.selectedWordIds, wordObj.id] }))} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", cursor: "pointer" }}><div style={{ width: 16, height: 16, borderRadius: 3, border: "2px solid " + (checked ? "var(--v-accent)" : "rgba(255,255,255,0.3)"), background: checked ? "var(--v-accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff", flexShrink: 0 }}>{checked ? "✓" : ""}</div><span style={{ fontSize: 13, fontStyle: "italic", color: "var(--v-text)" }}>{word}</span><span style={{ fontSize: 11, color: "var(--v-muted)" }}>{wordObj.translation}</span></div>) : null; })}
                       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                        <button onClick={() => { savingTo.selectedWordIds.forEach(wid => { setWords(prev => prev.map(w => w.id === wid ? { ...w, sentences: [...(w.sentences || []), { en: s.en, sr: s.sr }] } : w)); }); showToast(`Primer dodat ✓`); setSavingTo(null); }} disabled={savingTo.selectedWordIds.length === 0} style={{ background: savingTo.selectedWordIds.length > 0 ? "#6366f1" : "#2a2a3e", border: "none", color: savingTo.selectedWordIds.length > 0 ? "#fff" : "#555", padding: "6px 14px", borderRadius: 6, cursor: savingTo.selectedWordIds.length > 0 ? "pointer" : "default", fontSize: 12, fontFamily: "monospace" }}>Sačuvaj</button>
-                        <button onClick={() => setSavingTo(null)} style={{ background: "none", border: "1px solid #2a2a3e", color: "#888", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Odustani</button>
+                        <button onClick={() => { savingTo.selectedWordIds.forEach(wid => { setWords(prev => prev.map(w => w.id === wid ? { ...w, sentences: [...(w.sentences || []), { en: s.en, sr: s.sr }] } : w)); }); showToast(`Primer dodat ✓`); setSavingTo(null); }} disabled={savingTo.selectedWordIds.length === 0} style={{ background: savingTo.selectedWordIds.length > 0 ? "var(--v-accent)" : "var(--v-border)", border: "none", color: savingTo.selectedWordIds.length > 0 ? "#fff" : "var(--v-muted)", padding: "6px 14px", borderRadius: 6, cursor: savingTo.selectedWordIds.length > 0 ? "pointer" : "default", fontSize: 12, fontFamily: "monospace" }}>Sačuvaj</button>
+                        <button onClick={() => setSavingTo(null)} style={{ background: "none", border: "1px solid var(--v-border)", color: "var(--v-muted)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Odustani</button>
                       </div>
                     </div>
                   ) : (
-                    <button onClick={() => setSavingTo({ sentenceIndex: i, selectedWordIds: [] })} style={{ background: "none", border: "1px solid rgba(99,102,241,0.4)", color: "#a5b4fc", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace", marginTop: 4 }}>+ sačuvaj primer</button>
+                    <button onClick={() => setSavingTo({ sentenceIndex: i, selectedWordIds: [] })} style={{ background: "none", border: "1px solid rgba(99,102,241,0.4)", color: "var(--v-accentSoft)", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "monospace", marginTop: 4 }}>+ sačuvaj primer</button>
                   )}
                 </div>
               ))}
-              <button onClick={() => setCombineResult(null)} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 12, fontFamily: "monospace", marginTop: 4 }}>✕ zatvori</button>
+              <button onClick={() => setCombineResult(null)} style={{ background: "none", border: "none", color: "var(--v-muted)", cursor: "pointer", fontSize: 12, fontFamily: "monospace", marginTop: 4 }}>✕ zatvori</button>
             </div>
           )}
 
@@ -810,15 +876,15 @@ export default function VocabTracker() {
                       <span style={{ fontSize: 11, background: color + "22", color: color, borderRadius: 10, padding: "2px 8px", fontFamily: "monospace" }}>{col.length}</span>
                     </div>
                     <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 6, minHeight: 60 }}>
-                      {col.length === 0 && <div style={{ color: "#333", fontSize: 12, textAlign: "center", padding: "16px 0" }}>—</div>}
+                      {col.length === 0 && <div style={{ color: "var(--v-subtle)", fontSize: 12, textAlign: "center", padding: "16px 0" }}>—</div>}
                       {col.map(w => (
                         <div key={w.id} onClick={() => { setSelected(w); setView("detail"); fetchImage(w.word, w.imageUrl, w.id); }}
-                          style={{ background: "#0f0f1a", border: "1px solid #1e1e2e", borderRadius: 8, padding: "10px 12px", cursor: "pointer", transition: "border-color 0.15s" }}
+                          style={{ background: "var(--v-card)", border: "1px solid var(--v-border)", borderRadius: 8, padding: "10px 12px", cursor: "pointer", transition: "border-color 0.15s" }}
                           onMouseEnter={e => e.currentTarget.style.borderColor = color + "88"}
-                          onMouseLeave={e => e.currentTarget.style.borderColor = "#1e1e2e"}>
-                          <div style={{ fontSize: 14, fontStyle: "italic", color: "#f0ebe3", fontWeight: "bold", marginBottom: 2 }}>{w.word}</div>
-                          {w.ipa && <div style={{ fontSize: 11, color: "#6366f1", fontFamily: "monospace", marginBottom: 3 }}>{w.ipa}</div>}
-                          {w.translation && <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>{w.translation}</div>}
+                          onMouseLeave={e => e.currentTarget.style.borderColor = "var(--v-border)"}>
+                          <div style={{ fontSize: 14, fontStyle: "italic", color: "var(--v-text)", fontWeight: "bold", marginBottom: 2 }}>{w.word}</div>
+                          {w.ipa && <div style={{ fontSize: 11, color: "var(--v-accent)", fontFamily: "monospace", marginBottom: 3 }}>{w.ipa}</div>}
+                          {w.translation && <div style={{ fontSize: 12, color: "var(--v-muted)" }}>{w.translation}</div>}
                           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                             {[["★","new","#3b82f6"],["?","learning","#e11d48"],["✓","known","#22c55e"]].map(([lbl, s, c]) => (
                               <button key={s} onClick={e => { e.stopPropagation(); updateStatus(w.id, s); }}
@@ -837,21 +903,21 @@ export default function VocabTracker() {
           {/* LIST VIEW */}
           {layoutView === "list" && (
             filteredWords.length === 0 ? (
-              <div style={{ textAlign: "center", color: "#555", padding: 60 }}><div style={{ fontSize: 40, marginBottom: 16 }}>📖</div><div>Nema reči. Klikni + DODAJ!</div></div>
+              <div style={{ textAlign: "center", color: "var(--v-muted)", padding: 60 }}><div style={{ fontSize: 40, marginBottom: 16 }}>📖</div><div>Nema reči. Klikni + DODAJ!</div></div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {filteredWords.map(w => (
                   <div key={w.id} onClick={() => { if (combineMode) { setSelectedIds(prev => prev.includes(w.id) ? prev.filter(id => id !== w.id) : [...prev, w.id]); } else { setSelected(w); setView("detail"); fetchImage(w.word, w.imageUrl, w.id); } }}
-                    style={{ background: combineMode && selectedIds.includes(w.id) ? "linear-gradient(135deg, #312e81, #4338ca)" : w.status === "known" ? "linear-gradient(135deg, #14532d, #166534)" : w.status === "learning" ? "linear-gradient(135deg, #4a0d1f, #6b1530)" : "linear-gradient(135deg, #1e3a5f, #1e3a8a)", border: "2px solid " + (combineMode && selectedIds.includes(w.id) ? "#818cf8" : w.status === "known" ? "#4ade80" : w.status === "learning" ? "#e11d48" : "#60a5fa"), borderRadius: 12, padding: "12px 16px", cursor: "pointer", display: "flex", flexDirection: "column", boxShadow: combineMode && selectedIds.includes(w.id) ? "0 0 16px rgba(129,140,248,0.4)" : "none", transition: "all 0.15s" }}
+                    style={{ background: combineMode && selectedIds.includes(w.id) ? "var(--v-selectedBg)" : "var(--v-card)", border: "1px solid var(--v-border)", borderLeft: "4px solid " + (combineMode && selectedIds.includes(w.id) ? "var(--v-accent)" : w.status === "known" ? "#22c55e" : w.status === "learning" ? "#e11d48" : "#3b82f6"), borderRadius: 12, padding: "12px 16px", cursor: "pointer", display: "flex", flexDirection: "column", boxShadow: combineMode && selectedIds.includes(w.id) ? "0 0 16px rgba(129,140,248,0.4)" : "none", transition: "all 0.15s" }}
                     onMouseEnter={e => { if (!combineMode) e.currentTarget.style.opacity = "0.9"; }} onMouseLeave={e => { if (!combineMode) e.currentTarget.style.opacity = "1"; }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: combineMode ? 0 : 8 }}>
-                      {combineMode && <div style={{ width: 20, height: 20, borderRadius: 4, border: "2px solid " + (selectedIds.includes(w.id) ? "#818cf8" : "rgba(255,255,255,0.3)"), background: selectedIds.includes(w.id) ? "#6366f1" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, color: "#fff" }}>{selectedIds.includes(w.id) ? "✓" : ""}</div>}
+                      {combineMode && <div style={{ width: 20, height: 20, borderRadius: 4, border: "2px solid " + (selectedIds.includes(w.id) ? "#818cf8" : "rgba(255,255,255,0.3)"), background: selectedIds.includes(w.id) ? "var(--v-accent)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, color: "#fff" }}>{selectedIds.includes(w.id) ? "✓" : ""}</div>}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", marginBottom: 2 }}>
-                          <div style={{ fontSize: 17, fontStyle: "italic", fontWeight: 700, color: "#fff" }}>{w.word}</div>
-                          {w.ipa && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontFamily: "monospace" }}>{w.ipa}</div>}
+                          <div style={{ fontSize: 17, fontStyle: "italic", fontWeight: 700, color: "var(--v-text)" }}>{w.word}</div>
+                          {w.ipa && <div style={{ fontSize: 10, color: "var(--v-muted)", fontFamily: "monospace" }}>{w.ipa}</div>}
                         </div>
-                        {w.translation && <div style={{ fontSize: 12, color: "#fff" }}>{w.translation}</div>}
+                        {w.translation && <div style={{ fontSize: 12, color: "var(--v-muted)" }}>{w.translation}</div>}
                       </div>
                     </div>
                     {!combineMode && (
@@ -859,12 +925,12 @@ export default function VocabTracker() {
                         {[["★","new","#3b82f6","Novo"],["?","learning","#e11d48","Učim"],["✓","known","#22c55e","Znam"]].map(([label, s, color, tip]) => (
                           <div key={s} style={{ position: "relative" }}>
                             <button onClick={e => { e.stopPropagation(); updateStatus(w.id, s); }} style={{ background: w.status === s ? color : "transparent", border: "1px solid " + (w.status === s ? color : "rgba(255,255,255,0.2)"), color: w.status === s ? "#fff" : "rgba(255,255,255,0.25)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>{label}</button>
-                            <div className="tip" style={{ position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#fff", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>{tip}</div>
+                            <div className="tip" style={{ position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>{tip}</div>
                           </div>
                         ))}
                         <div style={{ position: "relative" }}>
-                          <button onClick={e => { e.stopPropagation(); if (window.confirm(`Obrisati "${w.word}"?`)) deleteWord(w.id); }} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.3)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.15)"; e.currentTarget.style.color = "#fff"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.3)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>✕</button>
-                          <div className="tip" style={{ position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", background: "#1a1a2e", border: "1px solid #2a2a3e", color: "#fff", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>Briši</div>
+                          <button onClick={e => { e.stopPropagation(); if (window.confirm(`Obrisati "${w.word}"?`)) deleteWord(w.id); }} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "var(--v-statusInactive)", width: 24, height: 24, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s" }} onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.15)"; e.currentTarget.style.color = "var(--v-text)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.5)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="1"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--v-statusInactive)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; const t = e.currentTarget.parentNode.querySelector(".tip"); if(t) t.style.opacity="0"; }}>✕</button>
+                          <div className="tip" style={{ position: "absolute", bottom: 30, left: "50%", transform: "translateX(-50%)", background: "var(--v-panel)", border: "1px solid var(--v-border)", color: "var(--v-text)", padding: "3px 8px", borderRadius: 6, fontSize: 10, whiteSpace: "nowrap", pointerEvents: "none", opacity: 0, transition: "opacity 0.15s", fontFamily: "monospace", zIndex: 999 }}>Briši</div>
                         </div>
                       </div>
                     )}
@@ -877,15 +943,15 @@ export default function VocabTracker() {
       )}
 
       {view === "list" && !combineMode && (
-        <button onClick={() => { setView("add"); setWordInput(""); setAiData(null); setNotes(""); }} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "#d97706", border: "none", color: "#fff", padding: "14px 36px", borderRadius: 50, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 2, boxShadow: "0 4px 24px rgba(217,119,6,0.5)", zIndex: 100, whiteSpace: "nowrap" }}>+ DODAJ REČ</button>
+        <button onClick={() => { setView("add"); setWordInput(""); setAiData(null); setNotes(""); }} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "var(--v-action)", border: "none", color: "#fff", padding: "14px 36px", borderRadius: 50, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 2, boxShadow: "0 4px 24px rgba(217,119,6,0.5)", zIndex: 100, whiteSpace: "nowrap" }}>+ DODAJ REČ</button>
       )}
       {view === "list" && combineMode && (
-        <button onClick={generateCombined} disabled={selectedIds.length < 2 || combineLoading} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: selectedIds.length >= 2 ? "#6366f1" : "#2a2a3e", border: "none", color: selectedIds.length >= 2 ? "#fff" : "#555", padding: "14px 36px", borderRadius: 50, cursor: selectedIds.length >= 2 ? "pointer" : "default", fontSize: 15, fontFamily: "monospace", letterSpacing: 1, boxShadow: selectedIds.length >= 2 ? "0 4px 24px rgba(99,102,241,0.5)" : "none", zIndex: 100, whiteSpace: "nowrap", transition: "all 0.2s" }}>
+        <button onClick={generateCombined} disabled={selectedIds.length < 2 || combineLoading} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: selectedIds.length >= 2 ? "var(--v-accent)" : "var(--v-border)", border: "none", color: selectedIds.length >= 2 ? "#fff" : "var(--v-muted)", padding: "14px 36px", borderRadius: 50, cursor: selectedIds.length >= 2 ? "pointer" : "default", fontSize: 15, fontFamily: "monospace", letterSpacing: 1, boxShadow: selectedIds.length >= 2 ? "0 4px 24px rgba(99,102,241,0.5)" : "none", zIndex: 100, whiteSpace: "nowrap", transition: "all 0.2s" }}>
           {combineLoading ? "⟳ Generišem..." : selectedIds.length < 2 ? `Označi min. 2 reči (${selectedIds.length})` : `⊕ Generiši primere (${selectedIds.length})`}
         </button>
       )}
 
-      <style>{`* { outline: none; } input, textarea { transition: border-color 0.2s; } input:focus, textarea:focus { border-color: #6366f1 !important; } input::placeholder, textarea::placeholder { color: #444; }`}</style>
+      <style>{`* { outline: none; } input, textarea { transition: border-color 0.2s; } input:focus, textarea:focus { border-color: var(--v-accent) !important; } input::placeholder, textarea::placeholder { color: var(--v-subtle); } select { color-scheme: inherit; }`}</style>
     </div>
   );
 }
