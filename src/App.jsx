@@ -80,6 +80,33 @@ const insightsDb = {
   }
 };
 
+// v8.1: Saved AI stories are private per user (Supabase RLS).
+const storyDb = {
+  async load(token) {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/vocab_saved_stories?select=id,title,paragraphs,serbian,used_words,selected_words,created_at&order=created_at.desc&limit=500`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` }
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(result?.message || "Biblioteka priča nije dostupna. Pokreni SQL migraciju v8.1.");
+    return result;
+  },
+  async save(token, story) {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/vocab_saved_stories`, {
+      method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({ title: story.title, paragraphs: story.paragraphs, serbian: story.serbian || "", used_words: story.usedWords || [], selected_words: story.selectedWords || [] })
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !Array.isArray(result) || !result[0]) throw new Error(result?.message || "Čuvanje priče nije uspelo.");
+    return result[0];
+  },
+  async remove(token, id) {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/vocab_saved_stories?id=eq.${encodeURIComponent(id)}`, {
+      method: "DELETE", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) throw new Error("Brisanje priče nije uspelo.");
+  }
+};
+
 function getLocalDayStart() {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -330,6 +357,18 @@ export default function VocabTracker() {
   const [aiLabChatInput, setAiLabChatInput] = useState("");
   const [aiLabWordCount, setAiLabWordCount] = useState(5);
   const [aiLabSelectedTag, setAiLabSelectedTag] = useState("all");
+  // Word choice is stable until user requests a fresh random set or picks words manually.
+  const [aiLabSelectionMode, setAiLabSelectionMode] = useState("random");
+  const [aiLabSelectedIds, setAiLabSelectedIds] = useState([]);
+  const [aiLabManualOpen, setAiLabManualOpen] = useState(false);
+  const [aiLabManualSearch, setAiLabManualSearch] = useState("");
+  const [aiLabManualDraft, setAiLabManualDraft] = useState([]);
+  const [aiLabSavedStories, setAiLabSavedStories] = useState([]);
+  const [aiLabStoriesReady, setAiLabStoriesReady] = useState(false);
+  const [aiLabStoriesError, setAiLabStoriesError] = useState("");
+  const [aiLabStorySaving, setAiLabStorySaving] = useState(false);
+  const [aiLabLibraryOpen, setAiLabLibraryOpen] = useState(false);
+
 
   const [srsSchedules, setSrsSchedules] = useState({});
   const [srsHistory, setSrsHistory] = useState([]);
@@ -447,6 +486,22 @@ export default function VocabTracker() {
     }).catch(error=>{if(!cancelled){setInsightsError(error.message);setInsightsReady(false);}});
     return ()=>{cancelled=true;};
   },[user?.id,token]);
+
+  useEffect(() => {
+    if (!user?.id || !token) {
+      setAiLabSavedStories([]); setAiLabStoriesReady(false); setAiLabStoriesError("");
+      return;
+    }
+    let cancelled = false;
+    setAiLabStoriesReady(false); setAiLabStoriesError("");
+    storyDb.load(token).then(stories => {
+      if (cancelled) return;
+      setAiLabSavedStories(stories); setAiLabStoriesReady(true);
+    }).catch(error => {
+      if (!cancelled) { setAiLabStoriesError(error.message); setAiLabStoriesReady(false); }
+    });
+    return () => { cancelled = true; };
+  }, [user?.id, token]);
 
   const allTags=[...new Set(Object.values(wordTags).flat())].sort((a,b)=>a.localeCompare(b,"sr"));
   const saveWordTags=async (wordId,newTags)=>{
@@ -826,9 +881,60 @@ export default function VocabTracker() {
   const aiLabPool = words.filter(w =>
     (aiLabSelectedTag === "all" || (wordTags[String(w.id)] || []).includes(aiLabSelectedTag)) &&
     String(w.word || "").trim() && String(w.wordSr || w.translation || "").trim());
-  const aiLabChosenWords = aiLabPool.slice(0, aiLabWordCount);
+  const aiLabChosenWords = aiLabSelectedIds.map(id => words.find(w => String(w.id) === id)).filter(Boolean)
+    .filter(w => aiLabSelectionMode === "manual" || aiLabPool.some(p => String(p.id) === String(w.id)))
+    .slice(0, aiLabWordCount);
   const aiLabVocabulary = aiLabChosenWords.map(w => `${w.word} (${w.wordSr || w.translation})`).join(", ");
   const aiLabTags = [...new Set(Object.values(wordTags).flat().filter(Boolean))].sort((a, b) => a.localeCompare(b, "sr"));
+  const chooseRandomAiWords = (pool = aiLabPool, count = aiLabWordCount) => {
+    if (!pool.length) { setAiLabSelectedIds([]); setAiLabSelectionMode("random"); return; }
+    const previous = new Set(aiLabSelectedIds);
+    let picked = randomizeTestItems(pool).slice(0, count).map(w => String(w.id));
+    // Avoid giving the exact same set if alternatives exist.
+    if (pool.length > count && picked.length === previous.size && picked.every(id => previous.has(id))) {
+      const alternative = pool.find(w => !previous.has(String(w.id)));
+      if (alternative && picked.length) picked[picked.length - 1] = String(alternative.id);
+    }
+    setAiLabSelectedIds(picked);
+    setAiLabSelectionMode("random");
+  };
+  // Initial set and category/count updates: random instead of always taking first rows.
+  useEffect(() => {
+    if (aiLabSelectionMode !== "random") return;
+    const eligible = words.filter(w =>
+      (aiLabSelectedTag === "all" || (wordTags[String(w.id)] || []).includes(aiLabSelectedTag)) &&
+      String(w.word || "").trim() && String(w.wordSr || w.translation || "").trim());
+    setAiLabSelectedIds(randomizeTestItems(eligible).slice(0, aiLabWordCount).map(w => String(w.id)));
+  }, [words, wordTags, aiLabSelectedTag, aiLabWordCount, aiLabSelectionMode]);
+
+  const saveCurrentAiStory = async () => {
+    if (!aiLabStory || aiLabStorySaving) return;
+    if (!aiLabStoriesReady) { setAiLabError(aiLabStoriesError || "Pokreni SQL migraciju v8.1 za čuvanje priča."); return; }
+    if (aiLabStory.savedId) { showToast("Priča je već sačuvana."); return; }
+    setAiLabStorySaving(true); setAiLabError("");
+    try {
+      const saved = await storyDb.save(token, aiLabStory);
+      setAiLabSavedStories(prev => [saved, ...prev]);
+      setAiLabStory(prev => ({ ...prev, savedId: saved.id }));
+      showToast("Priča sačuvana u biblioteci ✓");
+    } catch (error) { setAiLabError(error.message || "Čuvanje nije uspelo."); }
+    finally { setAiLabStorySaving(false); }
+  };
+  const openSavedAiStory = story => {
+    setAiLabStory({ title: story.title, paragraphs: story.paragraphs, serbian: story.serbian,
+      usedWords: story.used_words || [], selectedWords: story.selected_words || [], savedId: story.id });
+    setAiLabShowTranslation(false); setAiLabMode("story"); setAiLabLibraryOpen(false);
+    setAiLabError("");
+  };
+  const deleteSavedAiStory = async story => {
+    if (!window.confirm(`Obrisati sačuvanu priču „${story.title}“?`)) return;
+    try {
+      await storyDb.remove(token, story.id);
+      setAiLabSavedStories(prev => prev.filter(item => item.id !== story.id));
+      setAiLabStory(prev => prev?.savedId === story.id ? { ...prev, savedId: null } : prev);
+      showToast("Priča obrisana.");
+    } catch (error) { setAiLabError(error.message || "Brisanje nije uspelo."); }
+  };
   const startAiLearning = async (mode = aiLabMode) => {
     setAiLabMode(mode); setAiLabError(""); setAiLabChecked(false);
     setAiLabAnswer(""); setAiLabExerciseIndex(0); setAiLabShowTranslation(false);
@@ -848,7 +954,7 @@ export default function VocabTracker() {
         const text = await requestAiLearning(`Create an original short, coherent B1-B2 English story (120-180 words) naturally using these vocabulary entries: ${aiLabVocabulary}. Include the given English words naturally; do not force all if unnatural. Provide a full natural Serbian translation. Reply ONLY JSON: {"title":"English title","paragraphs":["English paragraph 1","English paragraph 2","English paragraph 3"],"serbian":"Complete Serbian translation","usedWords":["English word"]}. No markdown.`, 1100);
         const data = parseAiLearningJson(text);
         if (!Array.isArray(data.paragraphs) || !data.paragraphs.length) throw new Error("Priča nije pravilno generisana.");
-        setAiLabStory(data);
+        setAiLabStory({ ...data, selectedWords: aiLabChosenWords.map(w => w.word), savedId: null });
       } else if (mode === "cloze") {
         const text = await requestAiLearning(`Create exactly 5 B1-B2 English cloze exercises using these words/phrases: ${aiLabVocabulary}. Each exercise must have a complete grammatical English sentence containing one target word once. Return ONLY JSON {"exercises":[{"sentence":"Sentence with _____ replacing the missing target word or phrase","answer":"exact English missing word/phrase","translation":"Serbian translation of full sentence","hint":"short Serbian hint"}]}. All five should be meaningful and different. No markdown.`, 1000);
         const data = parseAiLearningJson(text);
@@ -1006,6 +1112,28 @@ export default function VocabTracker() {
         <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 9999, background: "var(--v-accent)", color: "#fff", padding: "12px 20px", borderRadius: 10, fontFamily: "monospace", fontSize: 13, boxShadow: "0 4px 20px rgba(99,102,241,0.4)" }}>⟳ Dodajem u rečnik...</div>
       )}
       {toast && <div style={{ position: "fixed", top: 20, right: 20, zIndex: 999, background: toast.color, color: "#fff", padding: "10px 20px", borderRadius: 8, fontFamily: "monospace", fontSize: 14, boxShadow: "0 4px 20px rgba(0,0,0,0.5)" }}>{toast.msg}</div>}
+
+      {/* v8.1 manual vocabulary picker — does not modify the dictionary */}
+      {aiLabManualOpen && <div className="v81-modal-backdrop" onClick={()=>setAiLabManualOpen(false)}>
+        <section className="v81-modal" role="dialog" aria-modal="true" aria-label="Ručni izbor reči" onClick={e=>e.stopPropagation()}>
+          <div className="v81-modal-header"><div><h2>Izaberi reči za AI vežbu</h2><p>Izaberi najviše {aiLabWordCount} reči iz svog rečnika. Odabrano: {aiLabManualDraft.length}/{aiLabWordCount}</p></div>
+            <button type="button" className="v8-secondary" onClick={()=>setAiLabManualOpen(false)}>✕</button></div>
+          <input className="v81-search" value={aiLabManualSearch} onChange={e=>setAiLabManualSearch(e.target.value)} placeholder="Pretraži englesku ili srpsku reč..." autoFocus />
+          <div className="v81-pick-list">
+            {words.filter(w=>String(w.word||"").trim() && String(w.wordSr||w.translation||"").trim())
+              .filter(w=>(w.word+" "+(w.wordSr||w.translation)).toLocaleLowerCase("sr").includes(aiLabManualSearch.toLocaleLowerCase("sr")))
+              .sort((a,b)=>String(a.word).localeCompare(String(b.word),"en"))
+              .map(w=>{const id=String(w.id);const checked=aiLabManualDraft.includes(id);return <label key={id} className="v81-pick-item">
+                <input type="checkbox" checked={checked} disabled={!checked && aiLabManualDraft.length>=aiLabWordCount} onChange={e=>setAiLabManualDraft(prev=>e.target.checked?[...prev,id]:prev.filter(x=>x!==id))}/>
+                <span><strong>{w.word}</strong><small>{w.wordSr||w.translation}</small></span>
+              </label>;})}
+          </div>
+          <div className="v81-modal-actions">
+            <button type="button" className="v8-secondary" onClick={()=>setAiLabManualOpen(false)}>Odustani</button>
+            <button type="button" className="v8-primary" disabled={!aiLabManualDraft.length} onClick={()=>{setAiLabSelectedIds(aiLabManualDraft);setAiLabSelectionMode("manual");setAiLabManualOpen(false);}}>Primeni izbor ({aiLabManualDraft.length})</button>
+          </div>
+        </section>
+      </div>}
 
       {/* HEADER */}
       <div style={{ background: "var(--v-header)", borderBottom: "1px solid var(--v-border)", padding: "22px 24px 20px" }}>
@@ -1238,24 +1366,45 @@ export default function VocabTracker() {
             ))}
           </div>
           <div className="v8-controls">
-            <label>Kategorija <select value={aiLabSelectedTag} onChange={e=>setAiLabSelectedTag(e.target.value)}>
+            <label>Kategorija <select value={aiLabSelectedTag} onChange={e=>{setAiLabSelectedTag(e.target.value);setAiLabSelectionMode("random");}} disabled={aiLabSelectionMode === "manual"}>
               <option value="all">Sve reči</option>{aiLabTags.map(tag=><option key={tag} value={tag}>{tag}</option>)}
             </select></label>
-            <label>Broj reči <select value={aiLabWordCount} onChange={e=>setAiLabWordCount(Number(e.target.value))}>
+            <label>Broj reči <select value={aiLabWordCount} onChange={e=>{const n=Number(e.target.value);setAiLabWordCount(n);if(aiLabSelectionMode==="manual")setAiLabSelectedIds(prev=>prev.slice(0,n));}}>
               {[3,5,8,10].map(n=><option key={n} value={n}>{n}</option>)}
             </select></label>
-            <button className="v8-primary" onClick={() => startAiLearning(aiLabMode)} disabled={aiLabBusy || !aiLabPool.length}>
+            <button className="v8-secondary" type="button" disabled={aiLabBusy || !aiLabPool.length} onClick={()=>chooseRandomAiWords()}>🔀 Druge reči</button>
+            <button className="v8-secondary" type="button" onClick={()=>{setAiLabManualDraft(aiLabChosenWords.map(w=>String(w.id)));setAiLabManualSearch("");setAiLabManualOpen(true);}}>☑ Ručni izbor</button>
+            <button className="v8-primary" onClick={() => startAiLearning(aiLabMode)} disabled={aiLabBusy || !aiLabChosenWords.length}>
               {aiLabBusy ? "⟳ Generišem..." : aiLabMode === "story" ? "Generiši priču" : aiLabMode === "cloze" ? "Generiši zadatke" : aiLabMode === "listen" ? "Nova reč za diktat" : "Započni novi razgovor"}
             </button>
           </div>
           {aiLabError && <div className="v8-error" role="alert">{aiLabError}</div>}
-          <div className="v8-focus">Reči za vežbu: {aiLabChosenWords.length ? aiLabChosenWords.map(w=>w.word).join(" · ") : "Nema reči za izabranu kategoriju"}</div>
+          <div className="v8-focus"><strong>{aiLabSelectionMode === "manual" ? "Ručno izabrane reči" : "Nasumično izabrane reči"} ({aiLabChosenWords.length}):</strong> {aiLabChosenWords.length ? aiLabChosenWords.map(w=>w.word).join(" · ") : "Izaberi reči ili promeni kategoriju."}</div>
+          {aiLabMode === "story" && <div className="v81-library-toolbar">
+            <button type="button" className="v8-secondary" onClick={()=>setAiLabLibraryOpen(x=>!x)}>📚 Moje priče ({aiLabSavedStories.length})</button>
+            {!aiLabStoriesReady && <span className="v8-tip">{aiLabStoriesError || "Učitavam biblioteku..."}</span>}
+          </div>}
+          {aiLabMode === "story" && aiLabLibraryOpen && <section className="v8-card v81-library">
+            <h3>Moje sačuvane priče</h3>
+            {aiLabSavedStories.length ? aiLabSavedStories.map(story=><div key={story.id} className="v81-library-item">
+              <div><strong>{story.title}</strong><small>{new Date(story.created_at).toLocaleDateString("sr-RS")} · {(story.selected_words || []).length} reči</small></div>
+              <button type="button" className="v8-secondary" onClick={()=>openSavedAiStory(story)}>Otvori</button>
+              <button type="button" className="v81-danger" onClick={()=>deleteSavedAiStory(story)}>Obriši</button>
+            </div>) : <div className="v8-tip">Još nema sačuvanih priča. Generiši prvu i klikni „Sačuvaj priču“.</div>}
+          </section>}
           {aiLabMode === "story" && (
             <section className="v8-card">
               {aiLabStory ? <>
                 <div className="v8-eyebrow">ORIGINALNA AI PRIČA</div><h3>{aiLabStory.title || "Your story"}</h3>
                 {(aiLabStory.paragraphs || []).map((paragraph,i)=><p key={i} className="v8-story"><ClickableSentence text={paragraph} /></p>)}
-                <button className="v8-secondary" onClick={()=>setAiLabShowTranslation(x=>!x)}>{aiLabShowTranslation?"Sakrij prevod":"Prikaži prevod na srpski"}</button>
+                <div className="v81-story-actions">
+                  <button type="button" className="v8-primary" disabled={aiLabStorySaving || !!aiLabStory.savedId || !aiLabStoriesReady} onClick={saveCurrentAiStory}>
+                    {aiLabStorySaving ? "Čuvam..." : aiLabStory.savedId ? "✓ Sačuvano" : "🔖 Sačuvaj priču"}
+                  </button>
+                  <button type="button" className="v8-secondary" onClick={()=>setAiLabShowTranslation(x=>!x)}>{aiLabShowTranslation?"Sakrij prevod":"Prikaži prevod na srpski"}</button>
+                  <button type="button" className="v8-secondary" onClick={()=>speak((aiLabStory.paragraphs || []).join(" "))}>🔊 Čitaj naglas</button>
+                </div>
+                {!!aiLabStory.selectedWords?.length && <div className="v8-tip">Reči u ovoj priči: {aiLabStory.selectedWords.join(" · ")}</div>}
                 {aiLabShowTranslation && <div className="v8-translation">{aiLabStory.serbian || "Prevod nije dostupan."}</div>}
                 <div className="v8-tip">Možeš da označiš nepoznatu reč u priči i dodaš je u rečnik koristeći postojeći meni.</div>
               </> : <div className="v8-empty">Klikni „Generiši priču“ da dobiješ kratak engleski tekst sa rečima iz svog rečnika.</div>}
@@ -1667,6 +1816,10 @@ export default function VocabTracker() {
 @media(max-width:520px){.v51-left{grid-template-columns:1fr}.v51-modes{gap:14px}.v51-goal-controls{flex-wrap:wrap}.v51-top-progress{width:85px}.v51-flashcard{padding:17px 13px}.v51-card-mode{display:none}.v51-rating-grid{gap:5px}.v51-rating b{font-size:12px}.v51-rating small{font-size:10px}.v51-card-bottom button{padding:9px 8px;font-size:11px}.v51-dots{display:none}.v51-pane{padding:16px}}
 `}</style>
       <style>{`
+.v81-library-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px}
+.v81-library{margin-bottom:17px;min-height:0}.v81-library-item{display:flex;align-items:center;gap:10px;padding:12px 4px;border-bottom:1px solid var(--v-border);flex-wrap:wrap}.v81-library-item>div{flex:1;min-width:180px}.v81-library-item strong,.v81-library-item small{display:block}.v81-library-item small{color:var(--v-muted);font-size:12px;margin-top:5px}.v81-danger{background:var(--v-dangerBg);color:#d64f67;border:1px solid var(--v-dangerBorder);border-radius:9px;padding:10px 13px;cursor:pointer}
+.v81-story-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:20px}
+.v81-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px}.v81-modal{width:min(650px,100%);max-height:85vh;display:flex;flex-direction:column;background:var(--v-panel);color:var(--v-text);border:1px solid var(--v-border);border-radius:18px;padding:22px;box-shadow:0 20px 80px rgba(0,0,0,.3)}.v81-modal-header{display:flex;justify-content:space-between;gap:10px}.v81-modal-header h2{font-size:22px;margin:0}.v81-modal-header p{font-size:13px;color:var(--v-muted);margin:7px 0 15px}.v81-search{padding:12px;background:var(--v-input);color:var(--v-text);border:1px solid var(--v-border);border-radius:9px;margin-bottom:12px}.v81-pick-list{overflow:auto;min-height:80px;flex:1}.v81-pick-item{display:flex;align-items:center;gap:12px;padding:10px;border-bottom:1px solid var(--v-border);cursor:pointer}.v81-pick-item input{width:17px;height:17px;accent-color:var(--v-accent)}.v81-pick-item strong,.v81-pick-item small{display:block}.v81-pick-item small{color:var(--v-muted);margin-top:3px}.v81-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;flex-wrap:wrap}
 .v8-page{max-width:1080px;margin:0 auto;padding:28px 24px 50px;color:var(--v-text)}
 .v8-heading{display:flex;justify-content:space-between;align-items:start;gap:20px;flex-wrap:wrap;margin-bottom:23px}
 .v8-heading h2{font-size:29px;margin:5px 0 9px}.v8-heading p{margin:0;color:var(--v-muted);font-size:14px;line-height:1.6;max-width:690px}
