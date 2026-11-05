@@ -291,49 +291,79 @@ function mosaicShuffle(items, seed) {
   }
   return list;
 }
-function mosaicSquarify(items, width, height) {
+// v9.3: binary partition treemap — divides rectangles in BOTH directions.
+// Every leaf owns exactly one word. No shelf rows, no fixed column count.
+function mosaicBinaryTreemap(items, width, height, seed = 17) {
   if (!items.length || width <= 0 || height <= 0) return [];
-  const sum = items.reduce((n, item) => n + Math.max(.01, item.weight), 0);
-  const pending = items.map(item => ({...item, area: width * height * Math.max(.01,item.weight) / sum}));
-  const result = [];
-  let x = 0, y = 0, w = width, h = height;
-  const badness = (row, side) => {
-    const areas = row.map(i => i.area), total = areas.reduce((a,b)=>a+b,0);
-    if (!total || !side) return Infinity;
-    const max = Math.max(...areas), min = Math.max(.00001, Math.min(...areas));
-    return Math.max((side*side*max)/(total*total), (total*total)/(side*side*min));
-  };
-  let row=[];
-  const commit = () => {
-    if (!row.length) return;
-    const area = row.reduce((n,i)=>n+i.area,0);
-    if (w >= h) { // horizontal strip through remaining width
-      const strip = area / Math.max(.001, w);
-      let at = x;
-      row.forEach((item,index) => {
-        const tileW = index === row.length-1 ? x+w-at : item.area / Math.max(.001,strip);
-        result.push({...item,x:at,y,w:Math.max(0,tileW),h:Math.max(0,strip)}); at+=tileW;
-      });
-      y+=strip; h=Math.max(0,h-strip);
-    } else { // vertical strip through remaining height
-      const strip = area / Math.max(.001,h);
-      let at=y;
-      row.forEach((item,index)=>{
-        const tileH=index===row.length-1?y+h-at:item.area/Math.max(.001,strip);
-        result.push({...item,x,y:at,w:Math.max(0,strip),h:Math.max(0,tileH)});at+=tileH;
-      });
-      x+=strip;w=Math.max(0,w-strip);
+  const results = [];
+  const recurse = (group, x, y, w, h, depth, path) => {
+    if (group.length === 1) {
+      results.push({...group[0], x, y, w, h});
+      return;
     }
-    row=[];
+    const sum = group.reduce((acc, item) => acc + Math.max(0.2, item.weight), 0);
+    let cumulative = 0, cutIndex = 1, best = Infinity;
+    for (let i = 1; i < group.length; i++) {
+      cumulative += Math.max(0.2, group[i - 1].weight);
+      // Discourage very uneven groups as they lead to unreadable thin cells.
+      const fraction = cumulative / sum;
+      const difference = Math.abs(fraction - 0.5);
+      if (difference < best) { best = difference; cutIndex = i; }
+    }
+    const a = group.slice(0, cutIndex);
+    const b = group.slice(cutIndex);
+    const aTotal = a.reduce((acc, item) => acc + Math.max(0.2, item.weight), 0);
+    const frac = aTotal / sum;
+    // Split down the longer side. Near-square regions alternate orientation
+    // by the seeded branch key to produce an irregular, interlocking puzzle.
+    const ratio = w / h;
+    const hash = mosaicHash(`${seed}:${path}:${depth}`);
+    const splitVertical = ratio > 1.22 ? true : ratio < 0.82 ? false : (hash % 2 === 0);
+    if (splitVertical) {
+      const part = w * frac;
+      const reverse = (hash & 2) !== 0;
+      if (!reverse) {
+        recurse(a, x, y, part, h, depth + 1, path + 'L');
+        recurse(b, x + part, y, w - part, h, depth + 1, path + 'R');
+      } else {
+        recurse(b, x, y, w - part, h, depth + 1, path + 'L');
+        recurse(a, x + w - part, y, part, h, depth + 1, path + 'R');
+      }
+    } else {
+      const part = h * frac;
+      const reverse = (hash & 4) !== 0;
+      if (!reverse) {
+        recurse(a, x, y, w, part, depth + 1, path + 'T');
+        recurse(b, x, y + part, w, h - part, depth + 1, path + 'B');
+      } else {
+        recurse(b, x, y, w, h - part, depth + 1, path + 'T');
+        recurse(a, x, y + h - part, w, part, depth + 1, path + 'B');
+      }
+    }
   };
-  // Keep the order randomized, but pack into optimal-looking strips.
-  for (const item of pending) {
-    const side = Math.min(w,h);
-    if (row.length && badness([...row,item],side)>badness(row,side)) commit();
-    row.push(item);
+  recurse(items, 0, 0, width, height, 0, 'root');
+  return results;
+}
+// Recalculate the virtual canvas until *every* tile has room for its word.
+// The scrollable viewport then presents the entire puzzle without clipping.
+function mosaicReadableLayout(items, width, seed) {
+  if (!items.length) return {tiles: [], height: 360};
+  const minWidth = width < 500 ? 86 : 112;
+  const minHeight = width < 500 ? 58 : 66;
+  const minArea = width < 500 ? 8500 : 12500;
+  const sum = items.reduce((n, i) => n + i.weight, 0);
+  const minWeight = Math.max(0.15, Math.min(...items.map(i => i.weight)));
+  const avgWeight = sum / items.length;
+  const base = Math.ceil(items.length * minArea / width * Math.max(1, avgWeight / minWeight * 0.72));
+  let height = Math.max(360, base);
+  let tiles = [];
+  // A larger canvas also protects small-weight words from shrinking into lines.
+  for (let attempt = 0; attempt < 12; attempt++) {
+    tiles = mosaicBinaryTreemap(items, width, height, seed);
+    if (tiles.every(t => t.w >= minWidth && t.h >= minHeight)) break;
+    height = Math.ceil(height * 1.22);
   }
-  commit();
-  return result;
+  return {tiles, height};
 }
 function WordMosaic({words, srsHistory, testHistory, srsSchedules, onOpen, combineMode, selectedIds, onToggleSelection}) {
   const rootRef = useRef(null);
@@ -382,8 +412,8 @@ function WordMosaic({words, srsHistory, testHistory, srsSchedules, onOpen, combi
     });
   },[words,srsHistory,testHistory,srsSchedules,criterion]);
   const picked=useMemo(()=>limit>0?data.slice(0,limit):data,[data,limit]);
-  const height=Math.max(420,Math.ceil(picked.length/(width<440?2.8:width<760?4.5:7.5))*(width<440?105:105));
-  const tiles=useMemo(()=>mosaicSquarify(mosaicShuffle(picked,shuffleSeed),width,height),[picked,shuffleSeed,width,height]);
+  const mosaicLayout = useMemo(() => mosaicReadableLayout(mosaicShuffle(picked,shuffleSeed), width, shuffleSeed), [picked,shuffleSeed,width]);
+  const {tiles,height} = mosaicLayout;
   const chooseCriterion=(value)=>{setCriterion(value);try{localStorage.setItem("vocab_mosaic_criterion",value);}catch{}};
   const chooseLimit=(value)=>{setLimit(value);try{localStorage.setItem("vocab_mosaic_limit",String(value));}catch{}};
   const fieldStyle={background:"var(--v-input)",color:"var(--v-text)",border:"1px solid var(--v-border)",padding:"10px 11px",borderRadius:9,fontSize:12};
@@ -398,22 +428,24 @@ function WordMosaic({words, srsHistory, testHistory, srsSchedules, onOpen, combi
       </div>
     </div>
     <div style={{fontSize:11,color:"var(--v-muted)",marginBottom:12}}>Veća polja znače veću vrednost kriterijuma. Bez istorije reč dobija neutralnu procenu. Boja označava status.</div>
-    <div ref={rootRef} style={{position:"relative",width:"100%",height,overflow:"hidden",borderRadius:11,background:"var(--v-elevated)"}}>
+    <div style={{maxHeight:"min(76vh, 800px)",overflowY:"auto",overflowX:"hidden",borderRadius:11,border:"1px solid var(--v-border)",background:"var(--v-elevated)"}}>
+    <div ref={rootRef} style={{position:"relative",width:"100%",height,minHeight:360}}>
       {tiles.map(tile=>{
-        const word=tile.word, large=tile.w>=175&&tile.h>=90, tiny=tile.w<112||tile.h<66;
+        const word=tile.word, large=tile.w>=175&&tile.h>=105, tiny=tile.w<125||tile.h<82;
         const tint=word.status === "known" ? "var(--v-knownBg)" : word.status === "learning" ? "var(--v-learningBg)" : "var(--v-newBg)";
         const border=word.status === "known" ? "#22a36a" : word.status === "learning" ? "#e05a77" : "#4b98ee";
         const selected=combineMode&&selectedIds.includes(word.id);
         return <button type="button" key={String(word.id)} title={`${word.word} — ${word.translation || ""} | Pokušaja: ${tile.stats.total}, grešaka: ${tile.stats.errors}, težih: ${tile.stats.hard}`} onClick={()=>combineMode?onToggleSelection(word.id):onOpen(word)}
           style={{position:"absolute",left:tile.x+2,top:tile.y+2,width:Math.max(1,tile.w-4),height:Math.max(1,tile.h-4),background:selected?"var(--v-selectedBg)":tint,border:`1px solid ${selected?"var(--v-accent)":border+"66"}`,borderLeft:`3px solid ${border}`,color:"var(--v-text)",borderRadius:Math.min(12,Math.max(4,tile.h*.10)),padding:tiny?5:large?14:9,display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"flex-start",gap:large?5:2,overflow:"hidden",textAlign:"left",cursor:"pointer",boxSizing:"border-box",boxShadow:"0 2px 9px rgba(0,0,0,.04)",transition:"filter .15s"}}>
-          <strong style={{fontSize:tiny?11:large?Math.min(24,Math.max(16,tile.w/10)):14,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.15,maxWidth:"100%",whiteSpace:"normal",overflowWrap:"anywhere",display:"-webkit-box",WebkitBoxOrient:"vertical",WebkitLineClamp:tiny?2:3,overflow:"hidden"}}>{word.word}</strong>
+          <strong style={{fontSize:tiny?11:large?Math.min(24,Math.max(16,tile.w/10)):14,fontFamily:"Georgia,serif",fontStyle:"italic",lineHeight:1.15,maxWidth:"100%",whiteSpace:"normal",overflowWrap:"anywhere",display:"-webkit-box",WebkitBoxOrient:"vertical",WebkitLineClamp:tiny?3:3,overflow:"hidden"}}>{word.word}</strong>
           {!tiny&&<span style={{fontSize:large?13:11,color:"var(--v-muted)",maxWidth:"100%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{word.wordSr||word.translation}</span>}
           {large&&tile.w>225&&tile.h>118&&<span style={{position:"absolute",right:10,top:8,fontSize:10,color:border,fontWeight:700}}>{word.status==="known"?"Znam":word.status==="learning"?"Učim":"Novo"}</span>}
           {selected&&<span style={{position:"absolute",right:6,bottom:5,fontWeight:700,color:"var(--v-accent)"}}>✓</span>}
         </button>;
       })}
     </div>
-    <div style={{fontSize:11,color:"var(--v-muted)",marginTop:10}}>Klik otvara detalje reči. Pretraga, status i tag filter iznad važe i za mozaik.</div>
+    </div>
+    <div style={{fontSize:11,color:"var(--v-muted)",marginTop:10}}>Skroluj unutar mozaika za sve reči. Klik otvara detalje reči. Pretraga, status i tag filter iznad važe i za mozaik.</div>
   </section>;
 }
 
