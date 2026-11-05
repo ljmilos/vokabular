@@ -1733,26 +1733,26 @@ export default function VocabTracker() {
 `}</style>
       <style>{`
 /* V9 Visual Refresh — visual-only layer. Keeps Supabase/SRS/AI logic unchanged. */
-.v9-app{--v9-navy:#143a61;--v9-navy-deep:#0e2d4f;--v9-shadow:0 8px 25px rgba(12,48,92,.06);font-family:Inter,'Segoe UI',Arial,sans-serif!important}
+.v9-app{--v9-shadow:0 8px 25px rgba(12,48,92,.06);font-family:Inter,'Segoe UI',Arial,sans-serif!important}
 .v9-app *{box-sizing:border-box}
 .v9-app h1,.v9-app h2,.v9-app h3,.v9-app h4{font-family:Inter,'Segoe UI',Arial,sans-serif;letter-spacing:-.025em}
 .v9-app button,.v9-app select,.v9-app input{font-family:Inter,'Segoe UI',Arial,sans-serif!important}
-.v9-sidebar{position:fixed;inset:0 auto 0 0;width:232px;z-index:200;background:linear-gradient(170deg,var(--v9-navy-deep),var(--v9-navy))!important;padding:22px 13px!important;border:0!important;color:#eef7ff!important;box-shadow:3px 0 22px rgba(0,31,70,.11);overflow:visible}
+.v9-sidebar{position:fixed;inset:0 auto 0 0;width:232px;z-index:200;background:var(--v-panel)!important;padding:22px 13px!important;border-right:1px solid var(--v-border)!important;color:var(--v-text)!important;box-shadow:3px 0 22px rgba(0,0,0,.07);overflow:visible}
 .v9-sidebar-inner{max-width:none!important;height:100%;display:flex;flex-direction:column}
 .v9-sidebar-head{display:flex!important;flex-direction:column!important;gap:16px;margin-bottom:28px!important;align-items:stretch!important}
 .v9-sidebar-head>div:first-child{padding:8px 10px}
-.v9-sidebar-head>div:first-child>div:first-child{color:#8bd0ff!important;font-size:10px!important;letter-spacing:2px!important}
-.v9-sidebar-head h1{color:#fff!important;font-family:Inter,'Segoe UI',Arial,sans-serif!important;font-size:21px!important;font-weight:750!important}
-.v9-sidebar-head>div:first-child>div:last-child{color:#9fbfdc!important}
+.v9-sidebar-head>div:first-child>div:first-child{color:var(--v-accent)!important;font-size:10px!important;letter-spacing:2px!important}
+.v9-sidebar-head h1{color:var(--v-text)!important;font-family:Inter,'Segoe UI',Arial,sans-serif!important;font-size:21px!important;font-weight:750!important}
+.v9-sidebar-head>div:first-child>div:last-child{color:var(--v-subtle)!important}
 .v9-sidebar-head>div:nth-child(2){align-items:stretch!important;gap:6px!important;padding:0 9px}
-.v9-sidebar-head>div:nth-child(2)>div:first-child{font-size:10px!important;color:#bed5e8!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.v9-sidebar-head button[aria-label="Promeni temu"]{width:100%;text-align:left;background:rgba(255,255,255,.13)!important;border:1px solid rgba(255,255,255,.17)!important;color:#fff!important;padding:11px!important}
-.v9-sidebar-head button:not([aria-label]){color:#cee5f7!important;border-color:rgba(255,255,255,.22)!important}
+.v9-sidebar-head>div:nth-child(2)>div:first-child{font-size:10px!important;color:var(--v-muted)!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v9-sidebar-head button[aria-label="Promeni temu"]{width:100%;text-align:left;background:var(--v-elevated)!important;border:1px solid var(--v-border)!important;color:var(--v-text)!important;padding:11px!important}
+.v9-sidebar-head button:not([aria-label]){color:var(--v-muted)!important;border-color:var(--v-border)!important}
 .v9-navigation{display:flex!important;flex-direction:column!important;align-items:stretch!important;gap:7px!important;margin-bottom:0!important}
-.v9-navigation>button{width:100%;text-align:left;padding:13px 13px!important;border:0!important;background:transparent!important;color:#e0effe!important;border-radius:11px!important;white-space:normal!important;font-size:13px!important;min-height:43px}
-.v9-navigation>button:hover{background:rgba(255,255,255,.13)!important}
-.v9-navigation>button[style*="background: var(--v-accent)"]{background:#e7f3ff!important;color:#13436e!important}
-.v9-navigation>button:last-child{margin-left:0!important;margin-top:18px!important;background:#268ae8!important;color:#fff!important;text-align:center}
+.v9-navigation>button{width:100%;text-align:left;padding:13px 13px!important;border:0!important;background:transparent!important;color:var(--v-text)!important;border-radius:11px!important;white-space:normal!important;font-size:13px!important;min-height:43px}
+.v9-navigation>button:hover{background:var(--v-elevated)!important}
+.v9-navigation>button[style*="background: var(--v-accent)"]{background:var(--v-selectedBg)!important;color:var(--v-text)!important;border:1px solid var(--v-accent)!important}
+.v9-navigation>button:last-child{margin-left:0!important;margin-top:18px!important;background:var(--v-accent)!important;color:var(--v-accentText)!important;text-align:center}
 .v9-status-shortcuts{display:none!important}
 .v9-main{margin-left:232px;min-height:100vh;background:var(--v-bg);padding:16px 20px 48px}
 .v9-main>div,.v9-main>main{max-width:1340px!important}
