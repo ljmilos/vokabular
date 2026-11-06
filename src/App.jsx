@@ -62,34 +62,16 @@ const smartDb = {
 const insightsDb = {
   async load(token) {
     const headers={apikey:SUPABASE_KEY, Authorization:`Bearer ${token}`};
-    const [a,b,c]=await Promise.all([
+    const [a,b]=await Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/vocab_test_attempts?select=word_id,mode,correct,answered_at,session_id&order=answered_at.desc&limit=10000`,{headers}),
-      fetch(`${SUPABASE_URL}/rest/v1/vocab_word_tags?select=word_id,tag&limit=10000`,{headers}),
-      fetch(`${SUPABASE_URL}/rest/v1/vocab_tags?select=name&order=name.asc&limit=10000`,{headers})
+      fetch(`${SUPABASE_URL}/rest/v1/vocab_word_tags?select=word_id,tag&limit=10000`,{headers})
     ]);
-    if(!a.ok || !b.ok)throw new Error("v7 tabele nisu dostupne. Proveri v7 SQL migraciju.");
-    if(!c.ok)throw new Error("Nedostaje katalog tagova. Pokreni SQL migraciju v9.3 pre objavljivanja novog App.jsx.");
-    return {attempts:await a.json(),tags:await b.json(),catalog:await c.json()};
+    if(!a.ok || !b.ok)throw new Error("v7 tabele nisu dostupne. Pokreni SQL migraciju za v7.");
+    return {attempts:await a.json(),tags:await b.json()};
   },
   async saveTest(token,attempts) {
     const response=await fetch(`${SUPABASE_URL}/rest/v1/vocab_test_attempts`,{method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${token}`,"Content-Type":"application/json",Prefer:"return=minimal"},body:JSON.stringify(attempts)});
     if(!response.ok)throw new Error("Nije uspelo čuvanje testa u Supabase.");
-  },
-  async addCatalogTag(token,name) {
-    const response=await fetch(`${SUPABASE_URL}/rest/v1/vocab_tags`,{
-      method:"POST",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${token}`,"Content-Type":"application/json",Prefer:"return=representation"},
-      body:JSON.stringify({name})
-    });
-    if(!response.ok){const err=await response.json().catch(()=>null);throw new Error(err?.message||"Tag nije sačuvan.");}
-    return (await response.json())[0]?.name;
-  },
-  async removeCatalogTag(token,name) {
-    const response=await fetch(`${SUPABASE_URL}/rest/v1/vocab_tags?name=eq.${encodeURIComponent(name)}`,{
-      method:"DELETE",headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${token}`,Prefer:"return=representation"}
-    });
-    if(!response.ok)throw new Error("Tag se ne može obrisati dok je dodeljen nekoj reči.");
-    const rows=await response.json();
-    if(!rows.length)throw new Error("Tag nije pronađen ili nemaš pravo brisanja.");
   },
   async replaceTags(token,userId,wordId,tags) {
     // RPC atomically replaces tags for the authenticated user's word.
@@ -469,16 +451,17 @@ export default function VocabTracker() {
   const [testSessionId, setTestSessionId] = useState(null);
   const [testHistory, setTestHistory] = useState([]);
   const [wordTags, setWordTags] = useState({});
-  const [tagCatalog, setTagCatalog] = useState([]);
-  const [newCatalogTag, setNewCatalogTag] = useState("");
-  const [catalogSaving, setCatalogSaving] = useState(false);
-  const [tagSaveBusy, setTagSaveBusy] = useState(false);
   const [insightsReady, setInsightsReady] = useState(false);
   const [insightsError, setInsightsError] = useState("");
   const [tagFilter, setTagFilter] = useState("all");
   const [importRows, setImportRows] = useState([]);
   const [importBusy, setImportBusy] = useState(false);
   const [importNotice, setImportNotice] = useState("");
+  const [selectedTagInput, setSelectedTagInput] = useState("");
+  // Tagovi nove reči su privremeni dok reč ne dobije ID iz Supabase-a.
+  const [newWordTags, setNewWordTags] = useState([]);
+  const [newWordTagInput, setNewWordTagInput] = useState("");
+  const [newWordPendingTagId, setNewWordPendingTagId] = useState(null);
   const [insightsRange, setInsightsRange] = useState(7);
   // v8 AI Learning: standalone exercises; no writes to SRS or vocabulary.
   const [aiLabMode, setAiLabMode] = useState("story");
@@ -601,13 +584,12 @@ export default function VocabTracker() {
   }, [user?.id, token]);
 
   useEffect(() => {
-    if(!user?.id || !token){setTestHistory([]);setWordTags({});setTagCatalog([]);setInsightsReady(false);return;}
+    if(!user?.id || !token){setTestHistory([]);setWordTags({});setInsightsReady(false);return;}
     let cancelled=false;
     setInsightsReady(false);setInsightsError("");
     insightsDb.load(token).then(data=>{
       if(cancelled)return;
       setTestHistory(data.attempts);
-      setTagCatalog(data.catalog.map(x=>x.name));
       const next={};
       for(const tagRow of data.tags){(next[String(tagRow.word_id)] ||= []).push(tagRow.tag);}
       setWordTags(next);setInsightsReady(true);
@@ -615,44 +597,13 @@ export default function VocabTracker() {
     return ()=>{cancelled=true;};
   },[user?.id,token]);
 
-  // Centralni katalog, ne izvodimo opcije iz tagova pojedinačnih reči.
-  const allTags=[...tagCatalog].sort((a,b)=>a.localeCompare(b,"sr"));
-  const createCatalogTag=async(e)=>{
-    e.preventDefault();
-    const name=newCatalogTag.trim().replace(/\s+/g," ");
-    if(!insightsReady||catalogSaving)return;
-    if(!name||name.length>40){showToast("Naziv taga mora imati od 1 do 40 znakova.","#e11d48");return;}
-    if(allTags.some(t=>t.toLocaleLowerCase("sr")===name.toLocaleLowerCase("sr"))){showToast("Ovaj tag već postoji.","#d97706");return;}
-    setCatalogSaving(true);
-    try {
-      const stored=await insightsDb.addCatalogTag(token,name);
-      if(!stored)throw new Error("Tag nije vraćen iz baze.");
-      setTagCatalog(prev=>[...prev,stored]);setNewCatalogTag("");showToast("Tag kreiran ✓");
-    }catch(err){showToast(err.message||"Greška pri kreiranju taga.","#e11d48");}
-    finally{setCatalogSaving(false);}
-  };
-  const removeCatalogTag=async(name)=>{
-    if(catalogSaving)return;
-    if(Object.values(wordTags).some(tags=>tags.includes(name))){showToast("Prvo ukloni tag sa reči koje ga koriste.","#d97706");return;}
-    setCatalogSaving(true);
-    try{
-      await insightsDb.removeCatalogTag(token,name);
-      setTagCatalog(prev=>prev.filter(x=>x!==name));
-      if(tagFilter===name)setTagFilter("all");
-      if(aiLabSelectedTag===name)setAiLabSelectedTag("all");
-      showToast("Tag obrisan ✓");
-    }catch(err){showToast(err.message||"Brisanje nije uspelo.","#e11d48");}
-    finally{setCatalogSaving(false);}
-  };
+  const allTags=[...new Set(Object.values(wordTags).flat())].sort((a,b)=>a.localeCompare(b,"sr"));
   const saveWordTags=async (wordId,newTags)=>{
-    if(!insightsReady||tagSaveBusy){if(!insightsReady)showToast(insightsError||"Pokreni SQL migraciju v9.3.","#e11d48");return;}
-    const tags=[...new Set(newTags.map(x=>x.trim()).filter(Boolean))];
-    if(tags.length>12){showToast("Najviše 12 tagova po reči.","#d97706");return;}
-    if(tags.some(x=>!tagCatalog.includes(x))){showToast("Tag mora prvo biti kreiran u Podešavanjima.","#e11d48");return;}
-    setTagSaveBusy(true);
+    if(!insightsReady){showToast(insightsError||"Pokreni v7 SQL migraciju.","#e11d48");return;}
+    const tags=[...new Set(newTags.map(x=>x.trim()).filter(Boolean))].slice(0,12);
+    if(tags.some(x=>x.length>40)){showToast("Tag može imati najviše 40 znakova.","#e11d48");return;}
     try {await insightsDb.replaceTags(token,user.id,wordId,tags);setWordTags(prev=>({...prev,[String(wordId)]:tags}));showToast("Tagovi sačuvani ✓");}
     catch(e){showToast(e.message,"#e11d48");}
-    finally{setTagSaveBusy(false);}
   };
   const importVocabFile=async (file)=>{
     if(!file)return;
@@ -663,8 +614,6 @@ export default function VocabTracker() {
       const existing=new Set(words.map(w=>w.word.trim().toLocaleLowerCase("en")));
       const unique=new Set();
       const fresh=parsed.filter(r=>{const k=r.word.toLocaleLowerCase("en");if(existing.has(k)||unique.has(k))return false;unique.add(k);return true;});
-      const unknown=[...new Set(fresh.flatMap(r=>r.tags).filter(tag=>!tagCatalog.includes(tag)))];
-      if(unknown.length)throw new Error(`CSV sadrži nedefinisane tagove: ${unknown.slice(0,8).join(", ")}. Kreiraj ih prvo u Podešavanjima ili ih ukloni iz CSV fajla.`);
       setImportRows(fresh.slice(0,500));
       setImportNotice(`CSV: ${parsed.length} redova, ${fresh.length} novih bez duplikata${fresh.length>500?" (prvih 500 spremno za uvoz)":""}.`);
     }catch(e){setImportNotice(e.message);}
@@ -733,18 +682,59 @@ export default function VocabTracker() {
 
   const handleWordInput = (val) => { setWordInput(val); setAiData(null); setAiError(null); };
 
+  const addNewWordTag = (value = newWordTagInput) => {
+    const tag = String(value || "").trim();
+    if (!tag) return;
+    if (tag.length > 40) { showToast("Tag može imati najviše 40 znakova.", "#e11d48"); return; }
+    if (newWordTags.length >= 12 && !newWordTags.includes(tag)) {
+      showToast("Maksimalno 12 tagova po reči.", "#e11d48"); return;
+    }
+    setNewWordTags(prev => prev.includes(tag) ? prev : [...prev, tag]);
+    setNewWordTagInput("");
+  };
+
+  const resetNewWordForm = () => {
+    setWordInput(""); setAiData(null); setNotes("");
+    setNewWordTags([]); setNewWordTagInput(""); setNewWordPendingTagId(null);
+  };
+
   const addWord = async () => {
-    if (!wordInput.trim() || !aiData) return;
-    const duplicate = words.find(w => w.word.toLowerCase() === (aiData.wordEn || wordInput.trim()).toLowerCase());
-    if (duplicate) { showToast("Reč već postoji!", "#f59e0b"); return; }
+    if (saving || !wordInput.trim() || !aiData) return;
+    if (newWordTagInput.trim()) {
+      showToast("Prvo potvrdi upisani tag dugmetom '+ Dodaj tag'.", "#f59e0b");
+      return;
+    }
+    if (newWordTags.length > 0 && !insightsReady) {
+      showToast(insightsError || "Tagovi trenutno nisu dostupni. Reč nije upisana.", "#e11d48");
+      return;
+    }
+    if (!newWordPendingTagId) {
+      const duplicate = words.find(w => w.word.toLowerCase() === (aiData.wordEn || wordInput.trim()).toLowerCase());
+      if (duplicate) { showToast("Reč već postoji!", "#f59e0b"); return; }
+    }
     setSaving(true);
+    let insertedWordId = newWordPendingTagId;
     try {
-      const row = await db.insert({ word: aiData.wordEn || wordInput.trim(), wordSr: aiData.wordSr, translation: aiData.wordSr, ipa: aiData.ipa || "", partOfSpeech: aiData.partOfSpeech, synonyms: aiData.synonyms || [], sentences: aiData.sentences, notes: notes.trim(), imageUrl: null }, token);
-      if (row) setWords(prev => [normalize(row), ...prev]);
-      setWordInput(""); setAiData(null); setNotes(""); setView("list");
-      showToast("Reč sačuvana ✓");
-    } catch (e) { showToast("Greška pri čuvanju", "#ef4444"); }
-    setSaving(false);
+      let wordId = insertedWordId;
+      if (!wordId) {
+        const row = await db.insert({ word: aiData.wordEn || wordInput.trim(), wordSr: aiData.wordSr, translation: aiData.wordSr, ipa: aiData.ipa || "", partOfSpeech: aiData.partOfSpeech, synonyms: aiData.synonyms || [], sentences: aiData.sentences, notes: notes.trim(), imageUrl: null }, token);
+        if (!row?.id) throw new Error("Supabase nije vratio ID nove reči.");
+        wordId = row.id;
+        insertedWordId = wordId;
+        setWords(prev => [normalize(row), ...prev]);
+        // Ako čuvanje tagova ne uspe, sledeći klik samo ponavlja tagove.
+        setNewWordPendingTagId(wordId);
+      }
+      if (newWordTags.length > 0) {
+        await insightsDb.replaceTags(token, user.id, wordId, newWordTags);
+        setWordTags(prev => ({ ...prev, [String(wordId)]: [...newWordTags] }));
+      }
+      resetNewWordForm();
+      setWorkspaceTab("dictionary"); setView("list");
+      showToast("Reč i tagovi sačuvani ✓");
+    } catch (e) {
+      showToast(insertedWordId ? "Reč je sačuvana; ponovi čuvanje tagova." : (e.message || "Greška pri čuvanju reči/tagova."), "#ef4444");
+    } finally { setSaving(false); }
   };
 
   const updateStatus = async (id, status) => {
@@ -1269,8 +1259,6 @@ export default function VocabTracker() {
               </button>
             ))}
             <button onClick={() => {setView("insights");setCombineMode(false);}} style={{border:"1px solid var(--v-border)",background:view==="insights"?"var(--v-accent)":"var(--v-panel)",color:view==="insights"?"var(--v-accentText)":"var(--v-text)",padding:"10px 17px",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13}}>▥ Statistika</button>
-            <button onClick={() => {setView("settings");setCombineMode(false);}} aria-current={view==="settings"?"page":undefined}
-              style={{border:"1px solid var(--v-border)",background:view==="settings"?"var(--v-accent)":"var(--v-panel)",color:view==="settings"?"var(--v-accentText)":"var(--v-text)",padding:"10px 17px",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13}}>⚙ Podešavanja</button>
             <button onClick={() => startPractice(srsReady ? "smart" : "free")} disabled={words.length === 0}
               style={{ border: "1px solid " + (view === "review" ? "var(--v-accent)" : "var(--v-border)"), background: view === "review" ? "var(--v-accent)" : "var(--v-panel)", color: view === "review" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: words.length ? 1 : 0.5 }}>
               ◎  Vežbanje
@@ -1283,7 +1271,7 @@ export default function VocabTracker() {
               style={{ border: "1px solid " + (view === "test" ? "var(--v-accent)" : "var(--v-border)"), background: view === "test" ? "var(--v-accent)" : "var(--v-panel)", color: view === "test" ? "var(--v-accentText)" : "var(--v-text)", padding: "10px 17px", borderRadius: 10, fontWeight: 600, cursor: "pointer", fontSize: 13, opacity: words.length ? 1 : .5 }}>
               ✎ &nbsp; Testovi
             </button>
-            <button onClick={() => { setWorkspaceTab("dictionary"); setView("add"); setWordInput(""); setAiData(null); setNotes(""); }}
+            <button onClick={() => { setWorkspaceTab("dictionary"); resetNewWordForm(); setView("add"); }}
               style={{ marginLeft: "auto", background: "var(--v-accent)", color: "var(--v-accentText)", border: "none", borderRadius: 10, padding: "10px 17px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
               + Dodaj reč
             </button>
@@ -1345,14 +1333,29 @@ export default function VocabTracker() {
               </div>
             </div>
           )}
+          {aiData && !aiLoading && (
+            <section style={{background:"var(--v-panel)",border:"1px solid var(--v-border)",borderRadius:14,padding:18,marginBottom:20}}>
+              <div style={{fontSize:11,letterSpacing:2,color:"var(--v-accent)",marginBottom:8}}>KATEGORIJE / TAGOVI (OPCIONALNO)</div>
+              <div style={{fontSize:12,color:"var(--v-muted)",marginBottom:12}}>Tagovi se čuvaju tek kada klikneš „Sačuvaj u bazu“. Ako odustaneš pre čuvanja, ništa se ne upisuje.</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:newWordTags.length?12:0}}>
+                {newWordTags.map(tag=><button type="button" key={tag} title="Ukloni tag" onClick={()=>setNewWordTags(prev=>prev.filter(t=>t!==tag))} style={{border:"1px solid var(--v-border)",borderRadius:20,background:"var(--v-elevated)",color:"var(--v-text)",padding:"6px 11px",cursor:"pointer"}}>{tag} ×</button>)}
+              </div>
+              <form onSubmit={e=>{e.preventDefault();addNewWordTag();}} style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <input value={newWordTagInput} onChange={e=>setNewWordTagInput(e.target.value)} list="new-word-existing-tags" placeholder="npr. IT, Business..." maxLength={40} disabled={saving} style={{...inp,maxWidth:260,flex:"1 1 190px"}} />
+                <datalist id="new-word-existing-tags">{allTags.map(tag=><option key={tag} value={tag}/>)}</datalist>
+                <button type="submit" disabled={saving||!newWordTagInput.trim()} style={{background:"var(--v-accent)",color:"var(--v-accentText)",border:0,borderRadius:8,padding:"8px 14px",cursor:"pointer",opacity:!newWordTagInput.trim() ? .6:1}}>+ Dodaj tag</button>
+              </form>
+              {newWordPendingTagId && <div style={{marginTop:10,color:"#d97706",fontSize:12}}>Reč je već upisana, ali tagovi nisu sačuvani. Klikni ponovo „Sačuvaj tagove“ (neće dodati duplu reč).</div>}
+            </section>
+          )}
           {aiData && !aiLoading && <div style={{ marginBottom: 20 }}><label style={{ display: "block", fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 6, textTransform: "uppercase" }}>Tvoje beleške (opcionalno)</label><textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="npr. viđeno u Bloomberg članku o ETF-ima..." rows={2} style={{ ...inp, resize: "vertical", fontFamily: "Georgia, serif" }} /></div>}
           {aiData && !aiLoading && <div style={{ height: 80 }} />}
         </div>
       )}
 
       {view === "add" && aiData && !aiLoading && (
-        <button onClick={addWord} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "var(--v-action)", border: "none", color: "#fff", padding: "14px 36px", borderRadius: 50, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 2, boxShadow: "0 4px 24px rgba(217,119,6,0.5)", zIndex: 100, whiteSpace: "nowrap" }}>
-          {saving ? "ČUVAM..." : "SAČUVAJ U BAZU →"}
+        <button onClick={addWord} disabled={saving} style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)", background: "var(--v-action)", border: "none", color: "#fff", padding: "14px 36px", borderRadius: 50, cursor: "pointer", fontSize: 15, fontFamily: "monospace", letterSpacing: 2, boxShadow: "0 4px 24px rgba(217,119,6,0.5)", zIndex: 100, whiteSpace: "nowrap" }}>
+          {saving ? "ČUVAM..." : newWordPendingTagId ? "SAČUVAJ TAGOVE →" : "SAČUVAJ U BAZU →"}
         </button>
       )}
 
@@ -1427,29 +1430,7 @@ export default function VocabTracker() {
                 {selected.sentences.map((s, i) => <SentenceCard key={i} s={s} i={i} word={selected.word} onDelete={idx => { const updated = selected.sentences.filter((_, j) => j !== idx); setWords(prev => prev.map(w => w.id === selected.id ? { ...w, sentences: updated } : w)); setSelected(prev => ({ ...prev, sentences: updated })); }} onUpdate={(idx, updatedS) => { const updated = selected.sentences.map((x, j) => j === idx ? updatedS : x); setWords(prev => prev.map(w => w.id === selected.id ? { ...w, sentences: updated } : w)); setSelected(prev => ({ ...prev, sentences: updated })); }} />)}
               </div>
             )}
-            <section style={{...vocabCardStyle,marginBottom:16,padding:14}}>
-              <div style={{fontSize:12,color:"var(--v-muted)",marginBottom:8,fontWeight:700}}>KATEGORIJE / TAGOVI</div>
-              <p style={{fontSize:12,color:"var(--v-muted)",margin:"0 0 12px"}}>Izaberi jedan ili više tagova iz Podešavanja. Tagovi se čuvaju u Supabase-u.</p>
-              <details className="v93-tag-dropdown" onClick={e=>e.stopPropagation()}>
-                <summary>{(wordTags[String(selected.id)]||[]).length ? `${(wordTags[String(selected.id)]||[]).length} izabranih tagova` : "Izaberi tagove..."} <span aria-hidden="true">▾</span></summary>
-                <div className="v93-tag-dropdown-content">
-                  {allTags.length ? allTags.map(tag=>(
-                    <label key={tag} className="v93-tag-option">
-                      <input type="checkbox" disabled={!insightsReady||tagSaveBusy}
-                        checked={(wordTags[String(selected.id)]||[]).includes(tag)}
-                        onChange={e=>{
-                          const current=wordTags[String(selected.id)]||[];
-                          saveWordTags(selected.id,e.target.checked?[...current,tag]:current.filter(t=>t!==tag));
-                        }}/>
-                      <span>{tag}</span>
-                    </label>
-                  )):<div style={{padding:12,fontSize:12,color:"var(--v-muted)"}}>Nema kreiranih tagova. Otvori Podešavanja da kreiraš prvi tag.</div>}
-                </div>
-              </details>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
-                {(wordTags[String(selected.id)]||[]).map(tag=><span key={tag} className="v93-tag-chip">{tag}</span>)}
-              </div>
-            </section>
+            <section style={{...vocabCardStyle,marginBottom:16,padding:12}}><div style={{fontSize:12,color:"var(--v-muted)",marginBottom:8}}>KATEGORIJE / TAGOVI</div><div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>{(wordTags[String(selected.id)]||[]).map(tag=><button key={tag} title="Ukloni tag" onClick={()=>saveWordTags(selected.id,(wordTags[String(selected.id)]||[]).filter(t=>t!==tag))} style={{border:"1px solid var(--v-border)",borderRadius:20,background:"var(--v-elevated)",color:"var(--v-text)",padding:"5px 10px",cursor:"pointer"}}>{tag} ×</button>)}</div><form onSubmit={e=>{e.preventDefault();saveWordTags(selected.id,[...(wordTags[String(selected.id)]||[]),selectedTagInput]);setSelectedTagInput("");}} style={{display:"flex",gap:8,flexWrap:"wrap"}}><input value={selectedTagInput} onChange={e=>setSelectedTagInput(e.target.value)} placeholder="npr. IT, Business..." maxLength={40} style={{...inp,maxWidth:240}}/><button type="submit" disabled={!insightsReady||!selectedTagInput.trim()} style={{background:"var(--v-accent)",color:"var(--v-accentText)",border:0,borderRadius:8,padding:"8px 14px"}}>+ Dodaj tag</button></form></section>
             {selected.notes && <div style={{ marginBottom: 16 }}><div style={{ fontSize: 11, letterSpacing: 2, color: "var(--v-accent)", marginBottom: 4, textTransform: "uppercase" }}>Beleške</div><div style={{ fontSize: 13, color: "var(--v-muted)" }}>{selected.notes}</div></div>}
             <div style={{ fontSize: 11, color: "var(--v-subtle)", fontFamily: "monospace" }}>
               Dodano: {formatDate(selected.addedAt)} · Ponovljeno: {selected.reviewCount}x
@@ -1584,47 +1565,13 @@ export default function VocabTracker() {
         </main>
       )}
 
-      {view === "settings" && (
-        <main className="v93-settings-page">
-          <div className="v93-settings-header">
-            <div><div style={{fontSize:11,letterSpacing:2,color:"var(--v-accent)",fontWeight:800}}>OPŠTA PODEŠAVANJA</div>
-              <h2 style={{margin:"8px 0 6px",fontSize:28}}>Podešavanja</h2>
-              <p style={{margin:0,color:"var(--v-muted)"}}>Upravljaj dozvoljenim tagovima za svoj rečnik. Novi tagovi mogu se kreirati samo ovde.</p>
-            </div>
-          </div>
-          <section className="v93-settings-card">
-            <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
-              <h3 style={{margin:0,fontSize:20}}>Katalog tagova</h3>
-              <span style={{color:"var(--v-muted)",fontSize:13}}>{allTags.length} tagova</span>
-            </div>
-            <p style={{fontSize:13,color:"var(--v-muted)",lineHeight:1.6}}>Na primer: IT, Business, Everyday, Phrasal verbs. Jednoj reči možeš dodeliti više tagova.</p>
-            <form className="v93-settings-create" onSubmit={createCatalogTag}>
-              <input aria-label="Naziv novog taga" maxLength={40} placeholder="Naziv novog taga..." value={newCatalogTag} onChange={e=>setNewCatalogTag(e.target.value)} />
-              <button disabled={!insightsReady||catalogSaving||!newCatalogTag.trim()} type="submit">+ Kreiraj tag</button>
-            </form>
-            {!insightsReady&&<p style={{color:"#d97706",fontSize:13}}>{insightsError||"Učitavam tagove..."}</p>}
-            <div className="v93-settings-tags">
-              {allTags.map(tag=>{
-                const usage=words.filter(w=>(wordTags[String(w.id)]||[]).includes(tag)).length;
-                return <div className="v93-settings-tag" key={tag}>
-                  <div><strong>{tag}</strong><small>{usage} {usage===1?"reč":"reči"}</small></div>
-                  <button type="button" title={usage?"Prvo ukloni ovaj tag sa reči":"Obriši neiskorišćen tag"} disabled={catalogSaving||usage>0} onClick={()=>removeCatalogTag(tag)}>Obriši</button>
-                </div>;
-              })}
-              {!allTags.length&&<div style={{color:"var(--v-muted)",padding:12}}>Još nema definisanih tagova.</div>}
-            </div>
-            <p style={{fontSize:12,color:"var(--v-muted)",marginBottom:0}}>Tag se može obrisati samo ako nije dodeljen nijednoj reči, radi zaštite postojećih oznaka. Već korišćeni tag možeš ukloniti u detaljima pojedinačne reči.</p>
-          </section>
-        </main>
-      )}
-
       {view === "insights" && <main style={{maxWidth:1080,margin:"0 auto",padding:"24px",display:"grid",gap:18}}>
         <div style={{display:"flex",justifyContent:"space-between",gap:12,flexWrap:"wrap",alignItems:"center"}}><div><div style={{fontSize:11,color:"var(--v-accent)",letterSpacing:2}}>INSIGHTS & ORGANIZATION · V7</div><h2 style={{margin:"7px 0"}}>Statistika učenja</h2><p style={{margin:0,color:"var(--v-muted)"}}>Istorija SRS ponavljanja i završenih testova — bez menjanja postojećih ocena.</p></div><select aria-label="Period statistike" value={insightsRange} onChange={e=>setInsightsRange(Number(e.target.value))} style={{background:"var(--v-input)",color:"var(--v-text)",border:"1px solid var(--v-border)",padding:12,borderRadius:10}}><option value={7}>7 dana</option><option value={14}>14 dana</option><option value={30}>30 dana</option></select></div>
         {!insightsReady&&<div style={{...vocabCardStyle,color:"#d97706"}}>⚠ {insightsError||"Učitavam statistiku..."}</div>}
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(175px,1fr))",gap:12}}>{[["Pokušaji",recentAttempts.length],["Tačno",correctAttempts],["Uspešnost",recentAttempts.length?Math.round(correctAttempts/recentAttempts.length*100)+"%":"—"],["SRS ponavljanja",recentAttempts.filter(r=>r.mode==="SRS").length],["Test pitanja",recentAttempts.filter(r=>r.mode!=="SRS").length]].map(([label,value])=><div key={label} style={vocabCardStyle}><div style={{fontSize:12,color:"var(--v-muted)"}}>{label}</div><strong style={{display:"block",fontSize:28,marginTop:8,color:"var(--v-accent)"}}>{value}</strong></div>)}</div>
         <section style={vocabCardStyle}><h3 style={{marginTop:0}}>Aktivnost po danima</h3><div style={{display:"flex",gap:5,alignItems:"end",overflowX:"auto",minHeight:180,paddingTop:10}}>{dailyInsights.map(day=><div key={day.key} title={`${day.label}: ${day.correct} tačno, ${day.wrong} netačno`} style={{flex:"1 0 18px",minWidth:18,textAlign:"center"}}><div style={{display:"flex",flexDirection:"column",justifyContent:"end",height:115,borderBottom:"1px solid var(--v-border)"}}><div style={{height:`${Math.min(100,day.wrong*7)}%`,background:"#e11d48",borderRadius:"4px 4px 0 0",minHeight:day.wrong?3:0}}/><div style={{height:`${Math.min(100,day.correct*7)}%`,background:"#22a36a",minHeight:day.correct?3:0}}/></div><small style={{fontSize:9,color:"var(--v-muted)"}}>{day.label}</small></div>)}</div><p style={{fontSize:12,color:"var(--v-muted)"}}>🟩 Tačno / Znam &nbsp; 🟥 Netačno / Teško / Ne znam. Visina je ilustrativno ograničena za velike vrednosti.</p></section>
         <section style={vocabCardStyle}><h3 style={{marginTop:0}}>Reči sa najviše grešaka</h3>{hardestWords.length===0?<p style={{color:"var(--v-muted)"}}>Za ovaj period nema zabeleženih grešaka.</p>:hardestWords.map((item,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:"1px solid var(--v-border)",padding:"9px 0",gap:12}}><strong>{item.word}</strong><span style={{color:"var(--v-muted)"}}>{item.wrong} grešaka / {item.total} pokušaja</span></div>)}</section>
-        <section style={vocabCardStyle}><h3 style={{marginTop:0}}>Kategorije i tagovi</h3><p style={{color:"var(--v-muted)",fontSize:13}}>Tagovi se kreiraju u Podešavanjima, a dodeljuju rečima u njihovim detaljima.</p><div style={{display:"flex",flexWrap:"wrap",gap:8}}>{allTags.length?allTags.map(tag=><button key={tag} onClick={()=>{setTagFilter(tag);setWorkspaceTab("dictionary");setView("list");}} style={{background:"var(--v-elevated)",color:"var(--v-text)",border:"1px solid var(--v-border)",borderRadius:20,padding:"8px 13px",cursor:"pointer"}}>{tag} ({words.filter(w=>(wordTags[String(w.id)]||[]).includes(tag)).length})</button>):<span style={{color:"var(--v-muted)"}}>Još nema tagova.</span>}</div></section>
+        <section style={vocabCardStyle}><h3 style={{marginTop:0}}>Kategorije i tagovi</h3><p style={{color:"var(--v-muted)",fontSize:13}}>Tagove dodaješ otvaranjem detalja pojedinačne reči. Zatim ih filtriraš u Rečniku.</p><div style={{display:"flex",flexWrap:"wrap",gap:8}}>{allTags.length?allTags.map(tag=><button key={tag} onClick={()=>{setTagFilter(tag);setWorkspaceTab("dictionary");setView("list");}} style={{background:"var(--v-elevated)",color:"var(--v-text)",border:"1px solid var(--v-border)",borderRadius:20,padding:"8px 13px",cursor:"pointer"}}>{tag} ({words.filter(w=>(wordTags[String(w.id)]||[]).includes(tag)).length})</button>):<span style={{color:"var(--v-muted)"}}>Još nema tagova.</span>}</div></section>
       </main>}
 
       {/* PRACTICE — v5.1 screenshot-inspired responsive dashboard */}
@@ -1773,7 +1720,7 @@ export default function VocabTracker() {
                 {label} <span>{counts[key]}</span>
               </button>
             ))}
-            <button className="v9-new-word" onClick={() => { setView("add"); setWordInput(""); setAiData(null); setNotes(""); }}>+ Dodaj reč</button>
+            <button className="v9-new-word" onClick={() => { resetNewWordForm(); setView("add"); }}>+ Dodaj reč</button>
           </div>
           {/* Actions bar */}
           <div className="vocab-toolbar" style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 18, flexWrap: "wrap", background: "var(--v-panel)", padding: 10, border: "1px solid var(--v-border)", borderRadius: 14 }}>
@@ -2001,24 +1948,6 @@ export default function VocabTracker() {
 .v9-app *{box-sizing:border-box}
 .v9-app h1,.v9-app h2,.v9-app h3,.v9-app h4{font-family:Inter,'Segoe UI',Arial,sans-serif;letter-spacing:-.025em}
 .v9-app button,.v9-app select,.v9-app input{font-family:Inter,'Segoe UI',Arial,sans-serif!important}
-.v93-settings-page{max-width:1050px;margin:0 auto;padding:28px 16px;display:grid;gap:22px}
-.v93-settings-header{display:flex;justify-content:space-between;align-items:center;gap:12px}
-.v93-settings-card{background:var(--v-panel);border:1px solid var(--v-border);border-radius:18px;padding:25px;box-shadow:var(--v9-shadow)}
-.v93-settings-create{display:flex;gap:9px;flex-wrap:wrap;margin:18px 0 22px}
-.v93-settings-create input{flex:1 1 220px;min-width:0;background:var(--v-input);color:var(--v-text);border:1px solid var(--v-border);border-radius:10px;padding:12px}
-.v93-settings-create button{background:var(--v-accent);color:var(--v-accentText);border:0;border-radius:10px;padding:12px 20px;font-weight:750;cursor:pointer}
-.v93-settings-create button:disabled{opacity:.5;cursor:not-allowed}
-.v93-settings-tags{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
-.v93-settings-tag{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--v-border);border-radius:11px;background:var(--v-card);padding:13px}
-.v93-settings-tag strong{display:block;font-size:14px;overflow-wrap:anywhere}.v93-settings-tag small{display:block;color:var(--v-muted);margin-top:4px}
-.v93-settings-tag button{border:1px solid var(--v-border);border-radius:8px;color:var(--v-text);background:var(--v-elevated);padding:7px 10px;cursor:pointer}
-.v93-settings-tag button:disabled{opacity:.4;cursor:not-allowed}
-.v93-tag-dropdown{max-width:440px;position:relative}.v93-tag-dropdown summary{list-style:none;cursor:pointer;border:1px solid var(--v-border);background:var(--v-input);color:var(--v-text);border-radius:10px;padding:12px 15px;display:flex;justify-content:space-between;align-items:center}
-.v93-tag-dropdown summary::-webkit-details-marker{display:none}.v93-tag-dropdown[open] summary{border-color:var(--v-accent);border-radius:10px 10px 0 0}
-.v93-tag-dropdown-content{max-height:260px;overflow-y:auto;border:1px solid var(--v-accent);border-top:0;border-radius:0 0 10px 10px;background:var(--v-panel);padding:5px}
-.v93-tag-option{display:flex;align-items:center;gap:10px;padding:9px 10px;cursor:pointer;border-radius:7px;color:var(--v-text);font-size:13px}.v93-tag-option:hover{background:var(--v-elevated)}
-.v93-tag-option input{width:17px;height:17px;accent-color:var(--v-accent);cursor:pointer}
-.v93-tag-chip{padding:5px 10px;font-size:12px;background:var(--v-elevated);border:1px solid var(--v-border);border-radius:20px;color:var(--v-text)}
 .v9-sidebar{position:fixed;inset:0 auto 0 0;width:232px;z-index:200;background:var(--v-panel)!important;padding:22px 13px!important;border-right:1px solid var(--v-border)!important;color:var(--v-text)!important;box-shadow:3px 0 22px rgba(0,0,0,.07);overflow:visible}
 .v9-sidebar-inner{max-width:none!important;height:100%;display:flex;flex-direction:column}
 .v9-sidebar-head{display:flex!important;flex-direction:column!important;gap:16px;margin-bottom:28px!important;align-items:stretch!important}
